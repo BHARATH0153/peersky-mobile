@@ -14,6 +14,7 @@ import {
   withHyperRetry
 } from './fetch-retry.mjs'
 import { withHyperRuntimeForAddress } from './runtime.mjs'
+import { refreshHyperRuntimeNetwork } from './network-refresh.mjs'
 import { createHyperUrl, parseHyperUrl } from './url.mjs'
 import { readHyperBinaryResponse } from './binary-response.mjs'
 
@@ -59,6 +60,7 @@ export async function fetchHyper ({
       retryDelay,
       maxRetryDelay,
       backoffFactor,
+      beforeRetry: () => refreshHyperRuntimeNetwork(runtime),
       readResponse: async (response, headers) => {
         const responseUrl = response.url || requestUrl
         const mediaType = getHyperNavigationMediaType(responseUrl, headers)
@@ -186,6 +188,7 @@ export async function fetchHyperBinary ({
       retryDelay,
       maxRetryDelay,
       backoffFactor,
+      beforeRetry: () => refreshHyperRuntimeNetwork(runtime),
       readResponse: (response, headers) => readHyperBinaryResponse(response, headers, requestUrl)
     })
   })

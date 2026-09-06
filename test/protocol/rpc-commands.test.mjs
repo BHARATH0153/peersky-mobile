@@ -7,6 +7,7 @@ import {
   RPC_HYPER_LIBRARY_LIST,
   RPC_HYPER_LIBRARY_UPLOAD,
   RPC_HYPER_LAN_STATUS,
+  RPC_HYPER_REFRESH,
   RPC_HYPER_STORAGE_CLEAR_ALL,
   RPC_HYPER_STORAGE_CLEAR_CACHE,
   RPC_HYPER_STORAGE_DELETE_APP,
@@ -40,10 +41,11 @@ test('Hyper storage and LAN discovery use distinct RPC command IDs', () => {
     RPC_HYPER_LIBRARY_LIST,
     RPC_HYPER_LIBRARY_UPLOAD,
     RPC_HYPER_LAN_STATUS,
-    RPC_HYPER_STORAGE_CLEAR_ALL
+    RPC_HYPER_STORAGE_CLEAR_ALL,
+    RPC_HYPER_REFRESH
   ]
 
-  assert.deepEqual(commands, [1, 2, 3, 4, 5, 6, 7, 8, 9, 14])
+  assert.deepEqual(commands, [1, 2, 3, 4, 5, 6, 7, 8, 9, 14, 15])
   assert.equal(new Set(commands).size, commands.length)
 })
 

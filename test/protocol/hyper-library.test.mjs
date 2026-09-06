@@ -89,6 +89,39 @@ test('returns a fetched file with bounded metadata', async () => {
   })
 })
 
+test('refreshes stale discovery before reporting a fetched file as missing', async () => {
+  let available = false
+  let refreshes = 0
+  const drive = createDrive({ '/manual.pdf': { blob: { byteLength: 128 } } })
+  const originalEntry = drive.entry
+  drive.entry = (pathname, options) => available ? originalEntry(pathname, options) : null
+
+  const response = await listHyperdriveLocation({ url: `${DRIVE_URL}manual.pdf` }, {
+    runtime: { getDrive: async () => drive },
+    refreshRuntime: async () => {
+      refreshes++
+      available = true
+    }
+  })
+
+  assert.equal(response.ok, true)
+  assert.equal(response.location.name, 'manual.pdf')
+  assert.equal(refreshes, 1)
+})
+
+test('uses cached metadata without requiring network refresh', async () => {
+  let refreshes = 0
+  const drive = createDrive({ '/manual.pdf': { blob: { byteLength: 128 } } })
+
+  const response = await listHyperdriveLocation({ url: `${DRIVE_URL}manual.pdf` }, {
+    runtime: { getDrive: async () => drive },
+    refreshRuntime: async () => { refreshes++ }
+  })
+
+  assert.equal(response.ok, true)
+  assert.equal(refreshes, 0)
+})
+
 test('rejects a missing non-root path instead of displaying an empty folder', async () => {
   const drive = createDrive({})
   const response = await listHyperdriveLocation({ url: `${DRIVE_URL}missing/` }, {

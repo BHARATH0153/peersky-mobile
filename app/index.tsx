@@ -159,6 +159,7 @@ import {
   RPC_HOLESAIL_STOP,
   RPC_HYPER_FETCH,
   RPC_HYPER_INIT,
+  RPC_HYPER_REFRESH,
   RPC_P2PMD_ROOM_CREATE,
   RPC_P2PMD_ROOM_DISCONNECT,
   RPC_P2PMD_EDITOR_PAGE,
@@ -250,6 +251,7 @@ export default function App () {
   const workletRef = useRef<Worklet | null>(null)
   const rpcRef = useRef<RPC | null>(null)
   const workletGenerationRef = useRef(0)
+  const appStateRef = useRef(AppState.currentState)
   const browserWebViewRefs = useRef(new Map<string, ComponentRef<typeof WebView>>())
   const browserFaviconsRef = useRef(new Map<string, string>())
   const browserLastRecordedUrlsRef = useRef(new Map<string, string>())
@@ -519,8 +521,15 @@ export default function App () {
 
   useEffect(() => {
     const subscription = AppState.addEventListener('change', (nextState) => {
+      const previousState = appStateRef.current
+      appStateRef.current = nextState
       if (nextState !== 'active' && browserSessionReadyRef.current) {
         writeBrowserSession(browserTabsStateRef.current)
+      }
+      if (nextState === 'active' && previousState !== 'active' && rpcRef.current) {
+        void callRpc(RPC_HYPER_REFRESH, {}).catch((error) => {
+          console.warn('Unable to refresh Hyper networking:', error)
+        })
       }
     })
 

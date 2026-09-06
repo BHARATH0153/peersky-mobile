@@ -11,6 +11,7 @@ export async function withHyperRetry ({
   retryDelay,
   maxRetryDelay,
   backoffFactor,
+  beforeRetry,
   readResponse
 }) {
   let attempt = 0
@@ -30,6 +31,7 @@ export async function withHyperRetry ({
         const isRetryable = isPeerDiscoveryError(text) || response.status === 502
         if (isRetryable && attempt < retries) {
           attempt++
+          await runBeforeRetry(beforeRetry)
           await delay(currentDelay)
           currentDelay = Math.min(maxRetryDelay, Math.floor(currentDelay * backoffFactor))
           continue
@@ -52,6 +54,7 @@ export async function withHyperRetry ({
 
       if (isRetryable && attempt < retries) {
         attempt++
+        await runBeforeRetry(beforeRetry)
         await delay(currentDelay)
         currentDelay = Math.min(maxRetryDelay, Math.floor(currentDelay * backoffFactor))
         continue
@@ -67,6 +70,13 @@ export async function withHyperRetry ({
       }
     }
   }
+}
+
+async function runBeforeRetry (beforeRetry) {
+  if (typeof beforeRetry !== 'function') return
+  try {
+    await beforeRetry()
+  } catch {}
 }
 
 export function isPeerDiscoveryError (message) {

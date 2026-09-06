@@ -9,6 +9,7 @@ import {
   RPC_HYPER_LIBRARY_LIST,
   RPC_HYPER_LIBRARY_UPLOAD,
   RPC_HYPER_LAN_STATUS,
+  RPC_HYPER_REFRESH,
   RPC_HYPER_STORAGE_CLEAR_CACHE,
   RPC_HYPER_STORAGE_CLEAR_ALL,
   RPC_HYPER_STORAGE_DELETE_APP,
@@ -61,6 +62,7 @@ import {
   getHyperRuntime,
   getHyperStoragePath,
   getLANDiscoveryStatus,
+  refreshHyperNetworking,
   withHyperRuntimeMaintenance,
   withHyperRuntimeOperation
 } from '../hyper/runtime.mjs'
@@ -130,6 +132,11 @@ export async function routeRpcRequest (req) {
         ok: true,
         lan: getLANDiscoveryStatus()
       })
+      return
+    }
+
+    if (req.command === RPC_HYPER_REFRESH) {
+      replyJson(req, { ok: true, ...(await refreshHyperNetworking()) })
       return
     }
 
