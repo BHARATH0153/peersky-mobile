@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Pressable, StyleSheet, Switch, Text, View } from 'react-native'
+import ChevronRightIcon from '../../assets/icons/bootstrap/chevron-right.svg'
 import { BROWSER_PALETTES } from '../browser-appearance.mjs'
 import {
   getContentBlockingStatus,
@@ -19,6 +20,7 @@ type PrivacyProps = {
   persistenceError: string | null
   onContentBlockingEnabledChange: (enabled: boolean) => Promise<void>
   onFilterListsUpdated: () => void
+  onOpenUrl: (url: string) => void
   onYoutubeAdBlockingEnabledChange: (enabled: boolean) => void
 }
 
@@ -28,6 +30,7 @@ export function Privacy ({
   persistenceError,
   onContentBlockingEnabledChange,
   onFilterListsUpdated,
+  onOpenUrl,
   onYoutubeAdBlockingEnabledChange
 }: PrivacyProps) {
   const isDark = useSettingsDarkMode()
@@ -190,6 +193,25 @@ export function Privacy ({
           </Pressable>
         </View>
       </SettingsSection>
+
+      <SettingsSection title='Privacy policy'>
+        <Pressable
+          accessibilityLabel='Open PeerSky privacy policy'
+          accessibilityRole='link'
+          style={styles.linkRow}
+          onPress={() => onOpenUrl('https://github.com/p2plabsxyz/peersky-mobile/blob/main/PRIVACY.md')}
+        >
+          <SettingCopy
+            title='Read privacy policy'
+            description='Learn how PeerSky handles browser and device data.'
+          />
+          <ChevronRightIcon
+            width={16}
+            height={16}
+            color={isDark ? BROWSER_PALETTES.dark.mutedText : '#8190a7'}
+          />
+        </Pressable>
+      </SettingsSection>
     </View>
   )
 }
@@ -253,6 +275,12 @@ const styles = StyleSheet.create({
   },
   disabled: {
     opacity: 0.5
+  },
+  linkRow: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: 12,
+    padding: 16
   },
   errorBanner: {
     backgroundColor: '#fff1f3',

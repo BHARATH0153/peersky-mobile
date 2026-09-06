@@ -78,14 +78,16 @@ describe('mobile platform runtime configuration', () => {
   it('includes store build profiles and user-facing policy links', async () => {
     const easJson = JSON.parse(await readFile(repoFile('eas.json'), 'utf8'))
     const settings = await readFile(repoFile('app/settings/SettingsScreen.tsx'), 'utf8')
+    const privacySettings = await readFile(repoFile('app/settings/Privacy.tsx'), 'utf8')
     const privacyPolicy = await readFile(repoFile('PRIVACY.md'), 'utf8')
     const contentReport = await readFile(repoFile('.github/ISSUE_TEMPLATE/content-report.yml'), 'utf8')
 
     assert.equal(easJson.cli?.appVersionSource, 'remote')
     assert.equal(easJson.build?.production?.autoIncrement, true)
     assert.deepEqual(easJson.submit?.production, {})
-    assert.match(settings, /blob\/main\/PRIVACY[.]md/)
+    assert.match(privacySettings, /blob\/main\/PRIVACY[.]md/)
     assert.match(settings, /issues\/new[?]template=content-report[.]yml/)
+    assert.match(settings, /Send \{platformName\} feedback/)
     assert.match(privacyPolicy, /contact@p2plabs[.]xyz/)
     assert.match(privacyPolicy, /issues\/new[?]template=content-report[.]yml/)
     assert.match(contentReport, /name: Report harmful content/)
