@@ -3318,11 +3318,6 @@ export default function App () {
           onShare={(targetUrl, title) => void onBrowserMediaShare(targetUrl, title)}
         />
 
-        {(isBooting || !contentBlockingReady) && (
-          <View style={styles.browserLoader}>
-            <ActivityIndicator size='small' />
-          </View>
-        )}
         </KeyboardAvoidingView>
         <SafeAreaView
           edges={['bottom']}

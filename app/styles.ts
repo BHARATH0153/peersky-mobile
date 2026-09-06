@@ -397,11 +397,6 @@ export const styles = StyleSheet.create({
     color: '#596276',
     fontSize: 14
   },
-  browserLoader: {
-    position: 'absolute',
-    right: 12,
-    top: 98
-  },
   p2pmdWorkspace: {
     backgroundColor: '#1f2027',
     flex: 1
