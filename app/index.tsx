@@ -91,6 +91,7 @@ import {
   BROWSER_HOME_ICON,
   INTERNAL_APPS,
   type RuntimeTab,
+  canUseP2pAppPageActions,
   getRuntimeAppFromUrl,
   getRuntimeAppIconSource,
   getRuntimeAppTitle,
@@ -1246,7 +1247,7 @@ export default function App () {
   }
 
   async function onBrowserSharePage () {
-    if (!browserBookmarkActionAvailable) return
+    if (!browserPageActionAvailable) return
 
     try {
       await Share.share({
@@ -2244,6 +2245,10 @@ export default function App () {
     browserSource.kind,
     browserCurrentUrl
   )
+  const browserPageActionAvailable = browserBookmarkActionAvailable || (
+    browserSource.kind === 'app' &&
+    canUseP2pAppPageActions(browserSource.app, browserCurrentUrl)
+  )
   const browserPageIsBookmarked = browserBookmarkActionAvailable &&
     isBrowserPageBookmarked(browserCurrentUrl)
   const activeBrowserPageZoom = normalizeBrowserPageZoom(
@@ -2609,7 +2614,7 @@ export default function App () {
       palette={browserChrome}
       position={browserPreferences.addressBarPosition}
       showFullAddress={browserPreferences.showFullAddress}
-      shareActionAvailable={browserBookmarkActionAvailable}
+      shareActionAvailable={browserPageActionAvailable}
       tabCount={browserTabsState.tabs.length}
       onAddressChange={(value) => {
         browserUserInteractedRef.current = true
