@@ -47,8 +47,8 @@ export function withHyperRuntimeForAddress (address, task) {
   })
 }
 
-export function withHyperRuntimeMaintenance (task) {
-  return runtimeCoordinator.runMaintenance(task)
+export function withHyperRuntimeMaintenance (task, prepare) {
+  return runtimeCoordinator.runMaintenance(task, prepare)
 }
 
 export async function getHyperRuntime () {

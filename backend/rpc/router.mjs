@@ -62,6 +62,7 @@ import { createDrive, publishMarkdownDocument, readHyperFile, uploadHyperFile } 
 import { listHyperdriveLocation, uploadHyperdriveFile } from '../hyper/library.mjs'
 import { fetchHyper, fetchHyperBinary, resetHyperFetch } from '../hyper/fetch.mjs'
 import {
+  closeHyperOfflineDownloads,
   keepHyperOffline,
   listHyperOffline,
   pauseHyperOffline,
@@ -281,7 +282,7 @@ export async function routeRpcRequest (req) {
 
         await getHyperRuntime()
         return { ok: true, requiresRestart: true }
-      })
+      }, closeHyperOfflineDownloads)
       replyJson(req, result)
       return
     }

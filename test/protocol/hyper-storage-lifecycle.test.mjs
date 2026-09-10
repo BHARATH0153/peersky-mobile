@@ -87,13 +87,14 @@ test('cache clear still reopens the runtime after a storage failure', async () =
 
 test('cache clear reopens the runtime when a P2P service fails to close', async () => {
   let runtimeCalls = 0
+  let runtimeCloseCalls = 0
 
   await assert.rejects(runP2pCacheClear({
     getRuntime: async () => { runtimeCalls += 1 },
     storagePath: '/test/storage',
     stopAssetServer: async () => {},
     closeServices: async () => { throw new Error('PeerChat close failed') },
-    closeRuntime: async () => {},
+    closeRuntime: async () => { runtimeCloseCalls += 1 },
     resetFetch: () => {},
     createStore: () => ({
       ready: async () => {},
@@ -103,6 +104,7 @@ test('cache clear reopens the runtime when a P2P service fails to close', async 
   }), /PeerChat close failed/)
 
   assert.equal(runtimeCalls, 2)
+  assert.equal(runtimeCloseCalls, 1)
 })
 
 test('cache clear reports archive cleanup failure without hiding successful deletion', async () => {
@@ -170,19 +172,21 @@ test('full P2P clear still reopens the runtime after deletion fails', async () =
 
 test('full P2P clear reopens the runtime when a P2P service fails to close', async () => {
   let runtimeCalls = 0
+  let runtimeCloseCalls = 0
 
   await assert.rejects(runP2pDataClear({
     getRuntime: async () => { runtimeCalls += 1 },
     getStoragePath: () => '/test/storage',
     stopAssetServer: async () => {},
     closeServices: async () => { throw new Error('PeerChat close failed') },
-    closeRuntime: async () => {},
+    closeRuntime: async () => { runtimeCloseCalls += 1 },
     resetFetch: () => {},
     removeStorage: () => {},
     clearArchive: async () => {}
   }), /PeerChat close failed/)
 
   assert.equal(runtimeCalls, 2)
+  assert.equal(runtimeCloseCalls, 1)
 })
 
 test('full P2P clear reports archive cleanup failure after deleting storage', async () => {
