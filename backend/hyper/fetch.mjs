@@ -17,6 +17,7 @@ import { withHyperRuntimeForAddress } from './runtime.mjs'
 import { refreshHyperRuntimeNetwork } from './network-refresh.mjs'
 import { createHyperUrl, parseHyperUrl } from './url.mjs'
 import { readHyperBinaryResponse } from './binary-response.mjs'
+import { configureHyperReadTimeout } from './read-policy.mjs'
 
 let hyperFetches = new WeakMap()
 
@@ -51,6 +52,7 @@ export async function fetchHyper ({
   const requestUrl = createHyperUrl(target.driveAddress, target.pathname)
 
   return withHyperRuntimeForAddress(target.driveAddress, async (runtime) => {
+    await prepareHyperRead(runtime, target.driveAddress)
     const fetch = await getHyperFetch(runtime)
 
     const result = await withHyperRetry({
@@ -179,6 +181,7 @@ export async function fetchHyperBinary ({
   const requestUrl = createHyperUrl(target.driveAddress, target.pathname)
 
   return withHyperRuntimeForAddress(target.driveAddress, async (runtime) => {
+    await prepareHyperRead(runtime, target.driveAddress)
     const fetch = await getHyperFetch(runtime)
 
     return withHyperRetry({
@@ -211,9 +214,15 @@ async function getHyperFetch (runtime) {
 
 function routedHyperFetch (url, options) {
   return withHyperRuntimeForAddress(url, async (runtime) => {
+    await prepareHyperRead(runtime, url)
     const fetch = await getHyperFetch(runtime)
     return fetch(url, options)
   })
+}
+
+async function prepareHyperRead (runtime, address) {
+  const drive = await runtime.getDrive(address)
+  configureHyperReadTimeout(drive)
 }
 
 function ensureFetchGlobals () {
