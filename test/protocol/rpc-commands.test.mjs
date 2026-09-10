@@ -81,6 +81,20 @@ test('Hyper offline RPC commands route to the offline manager', async () => {
   }
 })
 
+test('Hyper initialization resumes wanted offline downloads in the background', async () => {
+  const router = await readFile(
+    new URL('../../backend/rpc/router.mjs', import.meta.url),
+    'utf8'
+  )
+  const initRoute = router.slice(
+    router.indexOf('req.command === RPC_HYPER_INIT'),
+    router.indexOf('req.command === RPC_HYPER_FETCH')
+  )
+
+  assert.match(initRoute, /replyJson[(]req,[\s\S]*resumeWantedHyperOffline[(][)]/)
+  assert.match(initRoute, /resumeWantedHyperOffline[(][)][.]catch/)
+})
+
 test('PeerChat RPC commands use a dedicated command range', () => {
   const commands = [
     RPC_PEERCHAT_INIT,

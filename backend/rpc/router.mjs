@@ -116,6 +116,9 @@ export async function routeRpcRequest (req) {
         storagePath: getHyperStoragePath(),
         lan: getLANDiscoveryStatus()
       })
+      resumeWantedHyperOffline().catch((error) => {
+        console.error('[hyper] Failed to resume offline downloads:', error)
+      })
       return
     }
 
