@@ -229,6 +229,31 @@ test('closes every in-flight download without clearing wanted items', async () =
   assert.equal(harness.items.length, 1)
 })
 
+test('resumes a persisted interrupted folder after manager restart', async () => {
+  const interrupted = deferred()
+  const firstDrive = createDrive({
+    has: () => false,
+    done: () => interrupted.promise,
+    onDestroy: () => interrupted.resolve()
+  })
+  const first = createHarness(firstDrive)
+  const keeping = first.manager.keep({ url: FOLDER_URL, wait: false })
+  await waitFor(() => firstDrive.downloadCalls === 1)
+
+  await first.manager.close()
+  await keeping
+
+  const resumedDrive = createDrive({ has: sequence(false, false, true) })
+  const restarted = createHarness(resumedDrive, { items: first.items })
+  const result = await restarted.manager.resumeAll()
+
+  assert.equal(result.ok, true)
+  assert.equal(result.items[0].status, 'available')
+  assert.equal(resumedDrive.downloadCalls, 1)
+  assert.equal(restarted.addCalls, 0)
+  assert.equal(restarted.items.length, 1)
+})
+
 test('removes an active offline folder after cancelling its download', async () => {
   const pending = deferred()
   const events = []
