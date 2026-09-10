@@ -10,6 +10,12 @@ export const RPC_HYPER_LAN_STATUS = 9
 export const RPC_HYPER_STORAGE_CLEAR_ALL = 14
 export const RPC_HYPER_REFRESH = 15
 
+export const RPC_HYPER_OFFLINE_LIST = 60
+export const RPC_HYPER_OFFLINE_KEEP = 61
+export const RPC_HYPER_OFFLINE_PAUSE = 62
+export const RPC_HYPER_OFFLINE_RESUME = 63
+export const RPC_HYPER_OFFLINE_RESUME_ALL = 64
+
 export const RPC_HOLESAIL_START_LIVE = 10
 export const RPC_HOLESAIL_CONNECT = 11
 export const RPC_HOLESAIL_STATUS = 12

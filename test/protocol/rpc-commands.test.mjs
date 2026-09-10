@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import { readFile } from 'node:fs/promises'
 import { test } from 'node:test'
 import {
   RPC_HYPER_CREATE_DRIVE,
@@ -7,6 +8,11 @@ import {
   RPC_HYPER_LIBRARY_LIST,
   RPC_HYPER_LIBRARY_UPLOAD,
   RPC_HYPER_LAN_STATUS,
+  RPC_HYPER_OFFLINE_KEEP,
+  RPC_HYPER_OFFLINE_LIST,
+  RPC_HYPER_OFFLINE_PAUSE,
+  RPC_HYPER_OFFLINE_RESUME,
+  RPC_HYPER_OFFLINE_RESUME_ALL,
   RPC_HYPER_REFRESH,
   RPC_HYPER_STORAGE_CLEAR_ALL,
   RPC_HYPER_STORAGE_CLEAR_CACHE,
@@ -42,11 +48,37 @@ test('Hyper storage and LAN discovery use distinct RPC command IDs', () => {
     RPC_HYPER_LIBRARY_UPLOAD,
     RPC_HYPER_LAN_STATUS,
     RPC_HYPER_STORAGE_CLEAR_ALL,
-    RPC_HYPER_REFRESH
+    RPC_HYPER_REFRESH,
+    RPC_HYPER_OFFLINE_LIST,
+    RPC_HYPER_OFFLINE_KEEP,
+    RPC_HYPER_OFFLINE_PAUSE,
+    RPC_HYPER_OFFLINE_RESUME,
+    RPC_HYPER_OFFLINE_RESUME_ALL
   ]
 
-  assert.deepEqual(commands, [1, 2, 3, 4, 5, 6, 7, 8, 9, 14, 15])
+  assert.deepEqual(commands, [1, 2, 3, 4, 5, 6, 7, 8, 9, 14, 15, 60, 61, 62, 63, 64])
   assert.equal(new Set(commands).size, commands.length)
+})
+
+test('Hyper offline RPC commands route to the offline manager', async () => {
+  const router = await readFile(
+    new URL('../../backend/rpc/router.mjs', import.meta.url),
+    'utf8'
+  )
+
+  const routes = [
+    [RPC_HYPER_OFFLINE_LIST, 'RPC_HYPER_OFFLINE_LIST', 'listHyperOffline'],
+    [RPC_HYPER_OFFLINE_KEEP, 'RPC_HYPER_OFFLINE_KEEP', 'keepHyperOffline'],
+    [RPC_HYPER_OFFLINE_PAUSE, 'RPC_HYPER_OFFLINE_PAUSE', 'pauseHyperOffline'],
+    [RPC_HYPER_OFFLINE_RESUME, 'RPC_HYPER_OFFLINE_RESUME', 'resumeHyperOffline'],
+    [RPC_HYPER_OFFLINE_RESUME_ALL, 'RPC_HYPER_OFFLINE_RESUME_ALL', 'resumeWantedHyperOffline']
+  ]
+
+  for (const [command, commandName, handlerName] of routes) {
+    assert.equal(Number.isSafeInteger(command), true)
+    assert.match(router, new RegExp(`req[.]command === ${commandName}`))
+    assert.match(router, new RegExp(`await ${handlerName}[(]parseJsonMessage[(]req[.]data[)][)]`))
+  }
 })
 
 test('PeerChat RPC commands use a dedicated command range', () => {

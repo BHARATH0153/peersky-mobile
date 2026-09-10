@@ -9,6 +9,11 @@ import {
   RPC_HYPER_LIBRARY_LIST,
   RPC_HYPER_LIBRARY_UPLOAD,
   RPC_HYPER_LAN_STATUS,
+  RPC_HYPER_OFFLINE_KEEP,
+  RPC_HYPER_OFFLINE_LIST,
+  RPC_HYPER_OFFLINE_PAUSE,
+  RPC_HYPER_OFFLINE_RESUME,
+  RPC_HYPER_OFFLINE_RESUME_ALL,
   RPC_HYPER_REFRESH,
   RPC_HYPER_STORAGE_CLEAR_CACHE,
   RPC_HYPER_STORAGE_CLEAR_ALL,
@@ -56,6 +61,13 @@ import { restoreIdentityFromBackup } from '../backup/restore.mjs'
 import { createDrive, publishMarkdownDocument, readHyperFile, uploadHyperFile } from '../hyper/drive.mjs'
 import { listHyperdriveLocation, uploadHyperdriveFile } from '../hyper/library.mjs'
 import { fetchHyper, fetchHyperBinary, resetHyperFetch } from '../hyper/fetch.mjs'
+import {
+  keepHyperOffline,
+  listHyperOffline,
+  pauseHyperOffline,
+  resumeHyperOffline,
+  resumeWantedHyperOffline
+} from '../hyper/offline-manager.mjs'
 import {
   closeHyperRuntime,
   ensureLANDiscovery,
@@ -137,6 +149,31 @@ export async function routeRpcRequest (req) {
 
     if (req.command === RPC_HYPER_REFRESH) {
       replyJson(req, { ok: true, ...(await refreshHyperNetworking()) })
+      return
+    }
+
+    if (req.command === RPC_HYPER_OFFLINE_LIST) {
+      replyJson(req, await listHyperOffline(parseJsonMessage(req.data)))
+      return
+    }
+
+    if (req.command === RPC_HYPER_OFFLINE_KEEP) {
+      replyJson(req, await keepHyperOffline(parseJsonMessage(req.data)))
+      return
+    }
+
+    if (req.command === RPC_HYPER_OFFLINE_PAUSE) {
+      replyJson(req, await pauseHyperOffline(parseJsonMessage(req.data)))
+      return
+    }
+
+    if (req.command === RPC_HYPER_OFFLINE_RESUME) {
+      replyJson(req, await resumeHyperOffline(parseJsonMessage(req.data)))
+      return
+    }
+
+    if (req.command === RPC_HYPER_OFFLINE_RESUME_ALL) {
+      replyJson(req, await resumeWantedHyperOffline(parseJsonMessage(req.data)))
       return
     }
 
