@@ -171,7 +171,7 @@ export function createHyperOfflineManager ({
     return { ok: results.every((result) => result.ok), items: results.map(resultItem) }
   }
 
-  async function list ({ allowNetwork = true } = {}) {
+  async function list ({ allowNetwork = true, driveKey, path } = {}) {
     let items
     try {
       items = await listWantedItems()
@@ -179,6 +179,12 @@ export function createHyperOfflineManager ({
       return { ...failure(error), items: [] }
     }
     pruneState(items)
+    if (driveKey !== undefined || path !== undefined) {
+      const candidate = normalizeWantedHyperOfflineItem({ driveKey, path })
+      if (!candidate) return { ok: false, error: 'Invalid offline folder.', items: [] }
+      const id = getHyperOfflineItemId(candidate)
+      items = items.filter((item) => getHyperOfflineItemId(item) === id)
+    }
     const results = []
 
     for (const item of items) {

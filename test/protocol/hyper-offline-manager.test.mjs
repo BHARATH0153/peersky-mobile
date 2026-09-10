@@ -144,6 +144,25 @@ test('reports the bounded content size of an available offline folder', async ()
   assert.equal(result.items[0].sizeTruncated, false)
 })
 
+test('limits a status request to one validated offline folder', async () => {
+  const otherKey = 'b'.repeat(64)
+  const drive = createDrive()
+  const harness = createHarness(drive, {
+    items: [
+      { driveKey: DRIVE_KEY, path: '/docs/', wantedAt: 1 },
+      { driveKey: otherKey, path: '/media/', wantedAt: 2 }
+    ]
+  })
+
+  const result = await harness.manager.list({ driveKey: DRIVE_KEY, path: '/docs/' })
+  const invalid = await harness.manager.list({ driveKey: DRIVE_KEY, path: '../docs/' })
+
+  assert.equal(result.items.length, 1)
+  assert.equal(result.items[0].path, '/docs/')
+  assert.equal(invalid.ok, false)
+  assert.deepEqual(invalid.items, [])
+})
+
 test('bounds offline size scans even for entries without blobs', async () => {
   const entries = Array.from({ length: 5001 }, (_, index) => ({
     key: `/docs/link-${index}`,

@@ -82,7 +82,8 @@ export async function listHyperdriveLocation ({ url } = {}, options = {}) {
           type: 'directory',
           name: directory === '/' ? shortDriveName(target.driveAddress) : basename(directory),
           url: createHyperUrl(target.driveAddress, directory),
-          path: directory
+          path: directory,
+          driveKey: drive.id
         },
         items,
         truncated

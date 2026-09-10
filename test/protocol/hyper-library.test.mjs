@@ -22,6 +22,7 @@ test('lists only immediate directory children and folders first', async () => {
   })
 
   assert.equal(response.ok, true)
+  assert.equal(response.location.driveKey, 'a'.repeat(64))
   assert.deepEqual(response.items.map(({ type, name }) => ({ type, name })), [
     { type: 'directory', name: 'docs' },
     { type: 'file', name: 'cover.png' }
