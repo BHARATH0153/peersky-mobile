@@ -23,7 +23,7 @@ export function createHyperOfflineManager ({
   const failedItems = new Map()
   const removingItems = new Set()
 
-  async function keep ({ url } = {}) {
+  async function keep ({ url, wait = true } = {}) {
     const target = parseHyperUrl(url)
     if (target.error || target.driveAddress === 'default') {
       return { ok: false, error: target.error || 'A Hyperdrive address is required.' }
@@ -53,7 +53,8 @@ export function createHyperOfflineManager ({
       return failure(error)
     }
 
-    return start(item)
+    const download = start(item)
+    return wait === false ? success(item, 'downloading') : download
   }
 
   async function pause (candidate) {
@@ -85,7 +86,8 @@ export function createHyperOfflineManager ({
       return failure(error)
     }
     if (!item) return { ok: false, error: 'Offline folder not found.' }
-    return start(item)
+    const download = start(item)
+    return candidate?.wait === false ? success(item, 'downloading') : download
   }
 
   async function remove (candidate) {
@@ -333,7 +335,7 @@ function failure (error) {
 }
 
 function resultItem (result) {
-  return result.item
+  return result.error ? { ...result.item, error: result.error } : result.item
 }
 
 function normalizeError (error) {

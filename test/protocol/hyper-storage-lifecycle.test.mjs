@@ -36,6 +36,16 @@ test('explains that clearing downloaded P2P cache retains PeerChat history', () 
   assert.match(source, /Clear downloaded P2P cache[\s\S]*PeerChat rooms[\s\S]*message history are kept/)
 })
 
+test('P2P settings exposes offline folder status and lifecycle controls', () => {
+  const source = readFileSync(new URL('../../app/settings/P2PStorage.tsx', import.meta.url), 'utf8')
+  assert.match(source, /RPC_HYPER_OFFLINE_LIST/)
+  assert.match(source, /RPC_HYPER_OFFLINE_PAUSE/)
+  assert.match(source, /RPC_HYPER_OFFLINE_RESUME/)
+  assert.match(source, /RPC_HYPER_OFFLINE_REMOVE/)
+  assert.match(source, /Offline Hyper folders/)
+  assert.match(source, /Available offline/)
+})
+
 test('cache clear closes storage and reopens the runtime in order', async () => {
   const events = []
   let runtimeCalls = 0

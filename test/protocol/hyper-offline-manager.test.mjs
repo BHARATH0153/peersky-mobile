@@ -81,6 +81,25 @@ test('resumes a paused download without creating another manifest entry', async 
   assert.equal(harness.addCalls, 1)
 })
 
+test('starts a resumable download without holding the caller open', async () => {
+  const pending = deferred()
+  const drive = createDrive({
+    has: sequence(false, true),
+    done: () => pending.promise
+  })
+  const harness = createHarness(drive, {
+    items: [{ driveKey: DRIVE_KEY, path: '/docs/', wantedAt: 1 }]
+  })
+
+  const result = await harness.manager.resume({ driveKey: DRIVE_KEY, path: '/docs/', wait: false })
+
+  assert.equal(result.item.status, 'downloading')
+  await waitFor(() => drive.downloadCalls === 1)
+  assert.equal(drive.downloadCalls, 1)
+  pending.resolve()
+  await waitFor(() => drive.hasCalls === 2)
+})
+
 test('waits for Wi-Fi instead of resuming incomplete folders', async () => {
   const drive = createDrive({ has: () => false })
   const harness = createHarness(drive, {
