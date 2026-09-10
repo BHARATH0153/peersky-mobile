@@ -22,8 +22,9 @@ export function createHyperOfflineManager ({
   const pausedItems = new Set()
   const failedItems = new Map()
   const removingItems = new Set()
+  let automaticNetworkAllowed = true
 
-  async function keep ({ url, wait = true } = {}) {
+  async function keep ({ url, wait = true, allowNetwork = true } = {}) {
     const target = parseHyperUrl(url)
     if (target.error || target.driveAddress === 'default') {
       return { ok: false, error: target.error || 'A Hyperdrive address is required.' }
@@ -51,6 +52,10 @@ export function createHyperOfflineManager ({
       }
     } catch (error) {
       return failure(error)
+    }
+
+    if (!allowNetwork) {
+      return success(item, await hasItem(item) ? 'available' : 'waiting-for-wifi')
     }
 
     const download = start(item)
@@ -86,6 +91,9 @@ export function createHyperOfflineManager ({
       return failure(error)
     }
     if (!item) return { ok: false, error: 'Offline folder not found.' }
+    if (candidate?.allowNetwork === false) {
+      return success(item, await hasItem(item) ? 'available' : 'waiting-for-wifi')
+    }
     const download = start(item)
     return candidate?.wait === false ? success(item, 'downloading') : download
   }
@@ -141,6 +149,7 @@ export function createHyperOfflineManager ({
   }
 
   async function resumeAll ({ allowNetwork = true } = {}) {
+    automaticNetworkAllowed = allowNetwork
     let items
     try {
       items = await listWantedItems()
@@ -148,6 +157,7 @@ export function createHyperOfflineManager ({
       return { ...failure(error), items: [] }
     }
     pruneState(items)
+    if (!allowNetwork) await stopActiveDownloads()
     const results = []
 
     for (const item of items) {
@@ -161,7 +171,7 @@ export function createHyperOfflineManager ({
       if (available) {
         failedItems.delete(id)
         results.push(success(item, 'available'))
-      } else if (!allowNetwork) {
+      } else if (!automaticNetworkAllowed) {
         results.push(success(item, 'waiting-for-wifi'))
       } else {
         results.push(await start(item))
@@ -211,13 +221,17 @@ export function createHyperOfflineManager ({
   }
 
   async function close () {
+    await stopActiveDownloads()
+    activeDownloads.clear()
+  }
+
+  async function stopActiveDownloads () {
     const downloads = [...activeDownloads.values()]
     for (const active of downloads) {
       active.cancelled = true
       active.download?.destroy()
     }
     await Promise.allSettled(downloads.map((active) => active.promise))
-    activeDownloads.clear()
   }
 
   function start (item) {

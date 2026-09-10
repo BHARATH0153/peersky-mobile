@@ -94,7 +94,7 @@ test('Hyper initialization resumes wanted offline downloads in the background', 
     router.indexOf('req.command === RPC_HYPER_FETCH')
   )
 
-  assert.match(initRoute, /replyJson[(]req,[\s\S]*resumeWantedHyperOffline[(][)]/)
+  assert.match(initRoute, /replyJson[(]req,[\s\S]*if [(]options[.]allowNetwork !== false[)]/)
   assert.match(initRoute, /resumeWantedHyperOffline[(][)][.]catch/)
 })
 

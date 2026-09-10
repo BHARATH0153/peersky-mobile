@@ -113,6 +113,38 @@ test('waits for Wi-Fi instead of resuming incomplete folders', async () => {
   assert.equal(drive.downloadCalls, 0)
 })
 
+test('keeps new folders waiting without starting on a blocked network', async () => {
+  const drive = createDrive({ has: () => false })
+  const harness = createHarness(drive)
+
+  const result = await harness.manager.keep({ url: FOLDER_URL, allowNetwork: false })
+
+  assert.equal(result.ok, true)
+  assert.equal(result.item.status, 'waiting-for-wifi')
+  assert.equal(harness.items.length, 1)
+  assert.equal(drive.downloadCalls, 0)
+})
+
+test('stops active automatic downloads when Wi-Fi becomes unavailable', async () => {
+  const pending = deferred()
+  const drive = createDrive({
+    has: () => false,
+    done: () => pending.promise,
+    onDestroy: () => pending.resolve()
+  })
+  const harness = createHarness(drive, {
+    items: [{ driveKey: DRIVE_KEY, path: '/docs/', wantedAt: 1 }]
+  })
+  const keeping = harness.manager.resume({ driveKey: DRIVE_KEY, path: '/docs/', wait: false })
+  await waitFor(() => drive.downloadCalls === 1)
+
+  const result = await harness.manager.resumeAll({ allowNetwork: false })
+  await keeping
+
+  assert.equal(result.items[0].status, 'waiting-for-wifi')
+  assert.equal(drive.destroyCalls, 1)
+})
+
 test('reports an incomplete download as an error', async () => {
   const drive = createDrive({ has: () => false })
   const harness = createHarness(drive)

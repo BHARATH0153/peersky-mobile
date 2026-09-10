@@ -112,15 +112,18 @@ let pendingRestorePath = null
 export async function routeRpcRequest (req) {
   try {
     if (req.command === RPC_HYPER_INIT) {
+      const options = parseJsonMessage(req.data)
       await withHyperRuntimeOperation(() => {})
       replyJson(req, {
         ok: true,
         storagePath: getHyperStoragePath(),
         lan: getLANDiscoveryStatus()
       })
-      resumeWantedHyperOffline().catch((error) => {
-        console.error('[hyper] Failed to resume offline downloads:', error)
-      })
+      if (options.allowNetwork !== false) {
+        resumeWantedHyperOffline().catch((error) => {
+          console.error('[hyper] Failed to resume offline downloads:', error)
+        })
+      }
       return
     }
 

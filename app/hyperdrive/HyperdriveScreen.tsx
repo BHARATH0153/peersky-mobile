@@ -69,6 +69,7 @@ type HyperOfflineItem = {
 }
 
 type Props = {
+  offlineNetworkAllowed: boolean
   isDark: boolean
   isLandscape: boolean
   onCallRpc: (command: number, data?: Record<string, unknown>) => Promise<any>
@@ -85,7 +86,7 @@ const RECENT_FILTERS: Array<{ id: RecentFilter, label: string }> = [
   { id: 'fetched', label: 'Fetched' }
 ]
 
-export function HyperdriveScreen ({ isDark, isLandscape, onCallRpc, onOpenItem, onOpenUrl, onStatus }: Props) {
+export function HyperdriveScreen ({ offlineNetworkAllowed, isDark, isLandscape, onCallRpc, onOpenItem, onOpenUrl, onStatus }: Props) {
   const [recents, setRecents] = useState<HyperdriveItem[]>(loadHyperdriveRecents)
   const [items, setItems] = useState<HyperdriveItem[] | null>(null)
   const [location, setLocation] = useState<HyperdriveItem | null>(null)
@@ -124,11 +125,14 @@ export function HyperdriveScreen ({ isDark, isLandscape, onCallRpc, onOpenItem, 
   }, [offlineTarget?.driveKey, offlineTarget?.path])
 
   useEffect(() => {
-    if (!offlineTarget || offlineItem?.status !== 'downloading') return
+    if (!offlineTarget || (
+      offlineItem?.status !== 'downloading' &&
+      !(offlineNetworkAllowed && offlineItem?.status === 'waiting-for-wifi')
+    )) return
     const request = offlineRequestRef.current
     const timer = setTimeout(() => void loadOfflineState(offlineTarget, request, false), 2000)
     return () => clearTimeout(timer)
-  }, [offlineItem?.status, offlineTarget?.driveKey, offlineTarget?.path])
+  }, [offlineItem?.status, offlineNetworkAllowed, offlineTarget?.driveKey, offlineTarget?.path])
 
   async function loadOfflineState (target: { driveKey: string, path: string }, request: number, showLoading: boolean) {
     if (showLoading) setOfflineChecking(true)
@@ -189,7 +193,9 @@ export function HyperdriveScreen ({ isDark, isLandscape, onCallRpc, onOpenItem, 
       if (request !== offlineRequestRef.current) return
       setOfflineItem(response.item?.status === 'removed' ? null : response.item || null)
       if (response.warning) setNotice(response.warning)
-      onStatus(getOfflineActionNotice(command))
+      onStatus(response.item?.status === 'waiting-for-wifi'
+        ? 'Offline download waiting for Wi-Fi'
+        : getOfflineActionNotice(command))
     } catch (offlineError) {
       if (request === offlineRequestRef.current) {
         setError(offlineError instanceof Error ? offlineError.message : String(offlineError))

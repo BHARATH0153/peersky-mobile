@@ -27,6 +27,7 @@ import { Worklet } from 'react-native-bare-kit'
 import * as Crypto from 'expo-crypto'
 import { CameraView, useCameraPermissions } from 'expo-camera'
 import { File, Paths } from 'expo-file-system'
+import { useNetworkState } from 'expo-network'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import b4a from 'b4a'
 import RPC from 'bare-rpc'
@@ -129,6 +130,7 @@ import {
   getProxiedHyperUrl
 } from './downloads/browser-downloads.mjs'
 import { HyperdriveScreen } from './hyperdrive/HyperdriveScreen'
+import { canUseNetworkForOfflineHyper } from './hyperdrive/offline-network.mjs'
 import { PeerChatScreen, type PeerChatResponse } from './peerchat/PeerChatScreen'
 import { usePeerChatNotifications } from './peerchat/usePeerChatNotifications'
 import { peerSkyWebViewNativeConfig } from './downloads/PeerSkyWebView'
@@ -160,6 +162,10 @@ import {
   RPC_HOLESAIL_STOP,
   RPC_HYPER_FETCH,
   RPC_HYPER_INIT,
+  RPC_HYPER_OFFLINE_KEEP,
+  RPC_HYPER_OFFLINE_LIST,
+  RPC_HYPER_OFFLINE_RESUME,
+  RPC_HYPER_OFFLINE_RESUME_ALL,
   RPC_HYPER_REFRESH,
   RPC_P2PMD_ROOM_CREATE,
   RPC_P2PMD_ROOM_DISCONNECT,
@@ -182,6 +188,14 @@ type P2pmdRoom = {
 }
 
 type P2pmdViewMode = 'edit' | 'preview' | 'slides'
+
+const HYPER_OFFLINE_NETWORK_COMMANDS = new Set([
+  RPC_HYPER_INIT,
+  RPC_HYPER_OFFLINE_KEEP,
+  RPC_HYPER_OFFLINE_LIST,
+  RPC_HYPER_OFFLINE_RESUME,
+  RPC_HYPER_OFFLINE_RESUME_ALL
+])
 
 type P2pmdRoomHistoryEntry = {
   key: string
@@ -287,6 +301,7 @@ export default function App () {
     setAddressBarPosition,
     setContentBlockingEnabled: setContentBlockingPreference,
     setCustomSearchEngine,
+    setDownloadOnlyOnWifi,
     setEnforceManualPageZoom,
     setExternalLinkBehavior,
     setRestoreTabsOnStartup,
@@ -296,6 +311,14 @@ export default function App () {
     setWebsiteTextScale,
     setYoutubeAdBlockingEnabled
   } = useBrowserPreferences()
+  const networkState = useNetworkState()
+  const hyperOfflineNetworkAllowed = browserPreferencesReady && canUseNetworkForOfflineHyper({
+    downloadOnlyOnWifi: browserPreferences.downloadOnlyOnWifi,
+    isConnected: networkState.isConnected,
+    type: networkState.type
+  })
+  const hyperOfflineNetworkAllowedRef = useRef(false)
+  hyperOfflineNetworkAllowedRef.current = hyperOfflineNetworkAllowed
   const {
     bookmarks: browserBookmarks,
     isReady: browserBookmarksReady,
@@ -419,6 +442,15 @@ export default function App () {
       }, 0)
     }
   }, [])
+
+  useEffect(() => {
+    if (!browserPreferencesReady || !identityStoragePath) return
+    void callRpc(RPC_HYPER_OFFLINE_RESUME_ALL, {
+      allowNetwork: hyperOfflineNetworkAllowed
+    }).catch((error) => {
+      console.error('[hyper] Failed applying offline download network policy:', error)
+    })
+  }, [browserPreferencesReady, hyperOfflineNetworkAllowed, identityStoragePath])
 
   useEffect(() => {
     if (!browserPreferencesReady) return
@@ -657,7 +689,10 @@ export default function App () {
     }
 
     const request = rpc.request(command)
-    request.send(JSON.stringify(payload))
+    const requestPayload = HYPER_OFFLINE_NETWORK_COMMANDS.has(command)
+      ? { ...payload, allowNetwork: hyperOfflineNetworkAllowedRef.current }
+      : payload
+    request.send(JSON.stringify(requestPayload))
 
     const reply = await request.reply()
     if (!reply) return { ok: false, error: 'Missing response' }
@@ -2399,9 +2434,11 @@ export default function App () {
           addressBarPosition={browserPreferences.addressBarPosition}
           contentBlockingEnabled={browserPreferences.contentBlockingEnabled}
           customSearchUrl={browserPreferences.customSearchUrl}
+          downloadOnlyOnWifi={browserPreferences.downloadOnlyOnWifi}
           enforceManualPageZoom={browserPreferences.enforceManualPageZoom}
           externalLinkBehavior={browserPreferences.externalLinkBehavior}
           isDark={browserIsDark}
+          offlineNetworkAllowed={hyperOfflineNetworkAllowed}
           persistenceError={browserPreferencesError}
           restoreTabsOnStartup={browserPreferences.restoreTabsOnStartup}
           searchEngine={browserPreferences.searchEngine}
@@ -2422,6 +2459,7 @@ export default function App () {
           }}
           onClearCachedData={clearCachedBrowserTabPreviews}
           onCustomSearchSave={setCustomSearchEngine}
+          onDownloadOnlyOnWifiChange={setDownloadOnlyOnWifi}
           onEnforceManualPageZoomChange={setEnforceManualPageZoom}
           onExternalLinkBehaviorChange={setExternalLinkBehavior}
           onFilterListsUpdated={refreshContentBlockedPages}
@@ -2762,6 +2800,7 @@ export default function App () {
             ? activeTab === 'hyper'
               ? (
                 <HyperdriveScreen
+                  offlineNetworkAllowed={hyperOfflineNetworkAllowed}
                   isDark={browserIsDark}
                   isLandscape={!browserIsPortrait}
                   onCallRpc={(command, data = {}) => callRpc(command, data)}

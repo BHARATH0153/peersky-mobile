@@ -153,9 +153,11 @@ type SettingsScreenProps = {
   addressBarPosition: AddressBarPosition
   contentBlockingEnabled: boolean
   customSearchUrl: string
+  downloadOnlyOnWifi: boolean
   enforceManualPageZoom: boolean
   externalLinkBehavior: ExternalLinkBehavior
   isDark: boolean
+  offlineNetworkAllowed: boolean
   persistenceError: string | null
   restoreTabsOnStartup: boolean
   searchEngine: SearchEngine
@@ -171,6 +173,7 @@ type SettingsScreenProps = {
   onClearBrowsingData: () => boolean
   onClearCachedData: () => boolean
   onCustomSearchSave: (url: string) => boolean
+  onDownloadOnlyOnWifiChange: (enabled: boolean) => void
   onEnforceManualPageZoomChange: (enabled: boolean) => void
   onExternalLinkBehaviorChange: (behavior: ExternalLinkBehavior) => void
   onFilterListsUpdated: () => void
@@ -283,7 +286,15 @@ export function SettingsScreen(props: SettingsScreenProps) {
         {page === 'appearance' && <Appearance {...props} />}
         {page === 'data-clearing' && <DataClearing {...props} />}
         {page === 'privacy' && <Privacy {...props} />}
-        {page === 'p2p-storage' && <P2PStorage onCallRpc={props.onCallRpc} onOpenItem={props.onOpenHyperItem} />}
+        {page === 'p2p-storage' && (
+          <P2PStorage
+            downloadOnlyOnWifi={props.downloadOnlyOnWifi}
+            offlineNetworkAllowed={props.offlineNetworkAllowed}
+            onCallRpc={props.onCallRpc}
+            onDownloadOnlyOnWifiChange={props.onDownloadOnlyOnWifiChange}
+            onOpenItem={props.onOpenHyperItem}
+          />
+        )}
         {page === 'permissions' && <Permissions {...props} />}
         {page === 'link-device' && <LinkDeviceSettings {...props} />}
         {page === 'lan-discovery' && <LANDiscoveryTest onCallRpc={props.onCallRpc} />}

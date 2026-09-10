@@ -5,6 +5,7 @@ import {
   Clipboard,
   Pressable,
   StyleSheet,
+  Switch,
   Text,
   View
 } from 'react-native'
@@ -85,17 +86,21 @@ type HyperOfflineResponse = {
   ok: boolean
   error?: string
   warning?: string
+  item?: HyperOfflineItem
   items?: HyperOfflineItem[]
 }
 
 type P2PStorageProps = {
+  downloadOnlyOnWifi: boolean
+  offlineNetworkAllowed: boolean
   onCallRpc: (command: number, data?: object) => Promise<P2pStorageResponse>
+  onDownloadOnlyOnWifiChange: (enabled: boolean) => void
   onOpenItem: (item: { name: string, source: 'fetched' | 'published', url: string }) => void
 }
 
 const PAGE_SIZE = 5
 
-export function P2PStorage ({ onCallRpc, onOpenItem }: P2PStorageProps) {
+export function P2PStorage ({ downloadOnlyOnWifi, offlineNetworkAllowed, onCallRpc, onDownloadOnlyOnWifiChange, onOpenItem }: P2PStorageProps) {
   const isDark = useSettingsDarkMode()
   const requestSequence = useRef(0)
   const offlineRequestSequence = useRef(0)
@@ -131,10 +136,13 @@ export function P2PStorage ({ onCallRpc, onOpenItem }: P2PStorageProps) {
   }, [])
 
   useEffect(() => {
-    if (!offlineItems.some((item) => item.status === 'downloading')) return
+    if (!offlineItems.some((item) => (
+      item.status === 'downloading' ||
+      (offlineNetworkAllowed && item.status === 'waiting-for-wifi')
+    ))) return
     const timer = setTimeout(() => void loadOfflineItems(false), 2000)
     return () => clearTimeout(timer)
-  }, [offlineItems])
+  }, [offlineItems, offlineNetworkAllowed])
 
   async function loadPage (
     nextPage: number,
@@ -220,7 +228,9 @@ export function P2PStorage ({ onCallRpc, onOpenItem }: P2PStorageProps) {
       const response = await onCallRpc(command, payload) as HyperOfflineResponse
       if (!response.ok) throw new Error(response.error || 'Unable to update the offline folder.')
       if (mountedRef.current) {
-        if (response.warning) setNotice(response.warning)
+        setNotice(response.item?.status === 'waiting-for-wifi'
+          ? 'Offline download is waiting for Wi-Fi.'
+          : response.warning || null)
         await loadOfflineItems(false)
       }
     } catch (actionError) {
@@ -441,6 +451,21 @@ export function P2PStorage ({ onCallRpc, onOpenItem }: P2PStorageProps) {
       </SettingsSection>
 
       <SettingsSection title='Offline Hyper folders'>
+        <View style={[styles.offlinePreference, isDark ? darkStyles.divider : null]}>
+          <View style={styles.copy}>
+            <Text style={[styles.title, isDark ? darkStyles.primaryText : null]}>Download only on Wi-Fi</Text>
+            <Text style={[styles.description, isDark ? darkStyles.secondaryText : null]}>
+              Wait for Wi-Fi before saving Hyper folders for offline use.
+            </Text>
+          </View>
+          <Switch
+            accessibilityLabel='Download offline Hyper folders only on Wi-Fi'
+            value={downloadOnlyOnWifi}
+            onValueChange={onDownloadOnlyOnWifiChange}
+            trackColor={{ false: '#bac3d2', true: '#7eb2ee' }}
+            thumbColor={downloadOnlyOnWifi ? '#1f6fd1' : '#ffffff'}
+          />
+        </View>
         {isOfflineLoading && offlineItems.length === 0
           ? <ActivityIndicator style={styles.loading} />
           : offlineItems.length === 0
@@ -746,6 +771,15 @@ const styles = StyleSheet.create({
     minHeight: 82,
     paddingHorizontal: 18,
     paddingVertical: 11
+  },
+  offlinePreference: {
+    alignItems: 'center',
+    borderBottomColor: '#e6ecf5',
+    borderBottomWidth: 1,
+    flexDirection: 'row',
+    gap: 12,
+    paddingHorizontal: 18,
+    paddingVertical: 14
   },
   offlineActions: {
     alignItems: 'flex-end',
