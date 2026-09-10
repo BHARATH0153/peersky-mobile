@@ -4,7 +4,8 @@ import {
 } from './offline-core.mjs'
 import {
   addWantedHyperOfflineItem,
-  listWantedHyperOfflineItems
+  listWantedHyperOfflineItems,
+  removeWantedHyperOfflineItem
 } from './offline-manifest.mjs'
 import { withHyperRuntimeForAddress } from './runtime.mjs'
 import { parseHyperUrl } from './url.mjs'
@@ -12,11 +13,13 @@ import { parseHyperUrl } from './url.mjs'
 export function createHyperOfflineManager ({
   runWithRuntime,
   addWantedItem,
-  listWantedItems
+  listWantedItems,
+  removeWantedItem
 }) {
   const activeDownloads = new Map()
   const pausedItems = new Set()
   const failedItems = new Map()
+  const removingItems = new Set()
 
   async function keep ({ url } = {}) {
     const target = parseHyperUrl(url)
@@ -38,6 +41,8 @@ export function createHyperOfflineManager ({
     }
 
     if (!item) return { ok: false, error: 'Unable to resolve the Hyperdrive key.' }
+    const id = getHyperOfflineItemId(item)
+    if (removingItems.has(id)) return { ok: false, error: 'Offline folder is being removed.' }
     try {
       if (!await addWantedItem(item)) {
         return { ok: false, error: 'Unable to save the offline download request.' }
@@ -79,6 +84,56 @@ export function createHyperOfflineManager ({
     }
     if (!item) return { ok: false, error: 'Offline folder not found.' }
     return start(item)
+  }
+
+  async function remove (candidate) {
+    const normalized = normalizeWantedHyperOfflineItem(candidate)
+    if (!normalized) return { ok: false, error: 'Offline folder not found.' }
+
+    const id = getHyperOfflineItemId(normalized)
+    if (removingItems.has(id)) return { ok: false, error: 'Offline folder is already being removed.' }
+    removingItems.add(id)
+
+    try {
+      const item = await findWantedItem(normalized)
+      if (!item) return { ok: false, error: 'Offline folder not found.' }
+
+      const active = activeDownloads.get(id)
+      if (active) {
+        active.cancelled = true
+        active.download?.destroy()
+        await active.promise
+      }
+
+      if (!await removeWantedItem(item)) {
+        return { ok: false, error: 'Unable to remove the offline folder.' }
+      }
+
+      pausedItems.delete(id)
+      failedItems.delete(id)
+
+      try {
+        const retainedItems = await listWantedItems()
+        const cleared = await clearCachedFolder(runWithRuntime, item, retainedItems)
+        return {
+          ok: true,
+          item: { ...item, status: 'removed' },
+          cacheCleared: true,
+          ...cleared
+        }
+      } catch (error) {
+        return {
+          ok: true,
+          item: { ...item, status: 'removed' },
+          cacheCleared: false,
+          warning: `Offline folder was removed, but cached data could not be cleared. ${normalizeError(error)}`
+        }
+      }
+    } catch (error) {
+      return failure(error)
+    } finally {
+      removingItems.delete(id)
+    }
   }
 
   async function resumeAll ({ allowNetwork = true } = {}) {
@@ -157,6 +212,9 @@ export function createHyperOfflineManager ({
 
   function start (item) {
     const id = getHyperOfflineItemId(item)
+    if (removingItems.has(id)) {
+      return Promise.resolve({ ok: false, error: 'Offline folder is being removed.' })
+    }
     const existing = activeDownloads.get(id)
     if (existing) return existing.promise
 
@@ -218,19 +276,21 @@ export function createHyperOfflineManager ({
     }
   }
 
-  return { close, keep, list, pause, resume, resumeAll }
+  return { close, keep, list, pause, remove, resume, resumeAll }
 }
 
 const manager = createHyperOfflineManager({
   runWithRuntime: (address, task) => withHyperRuntimeForAddress(address, task),
   addWantedItem: addWantedHyperOfflineItem,
-  listWantedItems: listWantedHyperOfflineItems
+  listWantedItems: listWantedHyperOfflineItems,
+  removeWantedItem: removeWantedHyperOfflineItem
 })
 
 export const closeHyperOfflineDownloads = manager.close
 export const keepHyperOffline = manager.keep
 export const listHyperOffline = manager.list
 export const pauseHyperOffline = manager.pause
+export const removeHyperOffline = manager.remove
 export const resumeHyperOffline = manager.resume
 export const resumeWantedHyperOffline = manager.resumeAll
 
@@ -249,4 +309,25 @@ function resultItem (result) {
 function normalizeError (error) {
   const message = error instanceof Error ? error.message : String(error)
   return message.slice(0, 200)
+}
+
+async function clearCachedFolder (runWithRuntime, item, retainedItems) {
+  const retainedPaths = retainedItems
+    .filter((candidate) => candidate.driveKey === item.driveKey)
+    .map((candidate) => candidate.path)
+  let clearedFiles = 0
+  let clearedBytes = 0
+
+  await runWithRuntime(`hyper://${item.driveKey}/`, async (runtime) => {
+    const drive = await runtime.getDrive(`hyper://${item.driveKey}/`, { autoJoin: false })
+    for await (const entry of drive.list(item.path, { wait: false })) {
+      if (!entry?.value?.blob || retainedPaths.some((path) => entry.key.startsWith(path))) continue
+      const result = await drive.clear(entry.key, { diff: true })
+      if (!result?.blocks) continue
+      clearedFiles += 1
+      clearedBytes += Number(entry.value.blob.byteLength) || 0
+    }
+  })
+
+  return { clearedFiles, clearedBytes }
 }

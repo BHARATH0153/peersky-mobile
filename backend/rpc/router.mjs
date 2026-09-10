@@ -12,6 +12,7 @@ import {
   RPC_HYPER_OFFLINE_KEEP,
   RPC_HYPER_OFFLINE_LIST,
   RPC_HYPER_OFFLINE_PAUSE,
+  RPC_HYPER_OFFLINE_REMOVE,
   RPC_HYPER_OFFLINE_RESUME,
   RPC_HYPER_OFFLINE_RESUME_ALL,
   RPC_HYPER_REFRESH,
@@ -66,6 +67,7 @@ import {
   keepHyperOffline,
   listHyperOffline,
   pauseHyperOffline,
+  removeHyperOffline,
   resumeHyperOffline,
   resumeWantedHyperOffline
 } from '../hyper/offline-manager.mjs'
@@ -178,6 +180,11 @@ export async function routeRpcRequest (req) {
 
     if (req.command === RPC_HYPER_OFFLINE_RESUME_ALL) {
       replyJson(req, await resumeWantedHyperOffline(parseJsonMessage(req.data)))
+      return
+    }
+
+    if (req.command === RPC_HYPER_OFFLINE_REMOVE) {
+      replyJson(req, await removeHyperOffline(parseJsonMessage(req.data)))
       return
     }
 

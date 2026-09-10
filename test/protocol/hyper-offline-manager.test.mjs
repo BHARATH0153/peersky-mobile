@@ -124,9 +124,94 @@ test('closes every in-flight download without clearing wanted items', async () =
   assert.equal(harness.items.length, 1)
 })
 
-function createHarness (drive, { items = [], onAdd = () => {} } = {}) {
+test('removes an active offline folder after cancelling its download', async () => {
+  const pending = deferred()
+  const events = []
+  const drive = createDrive({
+    has: () => false,
+    entries: [{ key: '/docs/readme.md', value: { blob: { byteLength: 24 } } }],
+    done: () => pending.promise,
+    onDestroy: () => {
+      events.push('destroy')
+      pending.resolve()
+    },
+    onClear: () => events.push('clear')
+  })
+  const harness = createHarness(drive, {
+    onRemove: () => events.push('remove')
+  })
+  const keeping = harness.manager.keep({ url: FOLDER_URL })
+  await waitFor(() => drive.downloadCalls === 1)
+
+  const removed = await harness.manager.remove({ driveKey: DRIVE_KEY, path: '/docs/' })
+  await keeping
+
+  assert.equal(removed.ok, true)
+  assert.equal(removed.item.status, 'removed')
+  assert.equal(removed.cacheCleared, true)
+  assert.equal(removed.clearedFiles, 1)
+  assert.equal(removed.clearedBytes, 24)
+  assert.deepEqual(events, ['destroy', 'remove', 'clear'])
+  assert.equal(harness.items.length, 0)
+})
+
+test('preserves cached files covered by another wanted folder', async () => {
+  const retained = { driveKey: DRIVE_KEY, path: '/docs/keep/', wantedAt: 2 }
+  const removed = { driveKey: DRIVE_KEY, path: '/docs/', wantedAt: 1 }
+  const drive = createDrive({
+    entries: [
+      { key: '/docs/drop.txt', value: { blob: { byteLength: 10 } } },
+      { key: '/docs/keep/retained.txt', value: { blob: { byteLength: 20 } } },
+      { key: '/outside.txt', value: { blob: { byteLength: 30 } } }
+    ]
+  })
+  const harness = createHarness(drive, { items: [retained, removed] })
+
+  const result = await harness.manager.remove(removed)
+
+  assert.equal(result.ok, true)
+  assert.deepEqual(drive.clearPaths, ['/docs/drop.txt'])
+  assert.deepEqual(harness.items, [retained])
+})
+
+test('does not clear cached files when removing the wanted intent fails', async () => {
+  const item = { driveKey: DRIVE_KEY, path: '/docs/', wantedAt: 1 }
+  const drive = createDrive({
+    entries: [{ key: '/docs/readme.md', value: { blob: { byteLength: 24 } } }]
+  })
+  const harness = createHarness(drive, { items: [item], removeResult: false })
+
+  const result = await harness.manager.remove(item)
+
+  assert.equal(result.ok, false)
+  assert.match(result.error, /Unable to remove/)
+  assert.deepEqual(drive.clearPaths, [])
+  assert.deepEqual(harness.items, [item])
+})
+
+test('reports cache cleanup failure without undoing a removed intent', async () => {
+  const item = { driveKey: DRIVE_KEY, path: '/docs/', wantedAt: 1 }
+  const drive = createDrive({ listError: new Error('cache unavailable') })
+  const harness = createHarness(drive, { items: [item] })
+
+  const result = await harness.manager.remove(item)
+
+  assert.equal(result.ok, true)
+  assert.equal(result.item.status, 'removed')
+  assert.equal(result.cacheCleared, false)
+  assert.match(result.warning, /cache unavailable/)
+  assert.deepEqual(harness.items, [])
+})
+
+function createHarness (drive, {
+  items = [],
+  onAdd = () => {},
+  onRemove = () => {},
+  removeResult = true
+} = {}) {
   const wanted = [...items]
   let addCalls = 0
+  let removeCalls = 0
   const manager = createHyperOfflineManager({
     runWithRuntime: (_address, task) => task({
       getDrive: async () => drive
@@ -139,27 +224,40 @@ function createHarness (drive, { items = [], onAdd = () => {} } = {}) {
       wanted.unshift(item)
       return true
     },
-    listWantedItems: async () => [...wanted]
+    listWantedItems: async () => [...wanted],
+    removeWantedItem: async (item) => {
+      removeCalls += 1
+      onRemove(item)
+      if (!removeResult) return false
+      const index = wanted.findIndex((value) => value.driveKey === item.driveKey && value.path === item.path)
+      if (index !== -1) wanted.splice(index, 1)
+      return true
+    }
   })
 
   return {
     manager,
     items: wanted,
-    get addCalls () { return addCalls }
+    get addCalls () { return addCalls },
+    get removeCalls () { return removeCalls }
   }
 }
 
 function createDrive ({
   has = () => true,
   done = () => Promise.resolve(),
+  entries = [],
+  listError = null,
   onDownload = () => {},
-  onDestroy = () => {}
+  onDestroy = () => {},
+  onClear = () => {}
 } = {}) {
   return {
     id: DRIVE_KEY,
     downloadCalls: 0,
     destroyCalls: 0,
     hasCalls: 0,
+    clearPaths: [],
     async has (path) {
       this.hasCalls += 1
       return has(this.hasCalls, path)
@@ -175,6 +273,17 @@ function createDrive ({
           onDestroy(call, path)
         }
       }
+    },
+    async * list (path) {
+      if (listError) throw listError
+      for (const entry of entries) {
+        if (entry.key.startsWith(path)) yield entry
+      }
+    },
+    async clear (path) {
+      this.clearPaths.push(path)
+      onClear(path)
+      return { blocks: 1 }
     }
   }
 }
