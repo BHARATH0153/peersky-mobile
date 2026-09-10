@@ -191,7 +191,19 @@ type SettingsScreenProps = {
 
 const REPOSITORY_URL = 'https://github.com/p2plabsxyz/peersky-mobile'
 const LICENSE_URL = `${REPOSITORY_URL}/blob/main/LICENSE`
-const CONTENT_REPORT_URL = `${REPOSITORY_URL}/issues/new?template=content-report.yml`
+const CONTENT_REPORT_TITLE = '[Content report]: '
+const CONTENT_REPORT_BODY = `## Content URL
+
+Provide the public HTTP, HTTPS, or Hyper URL where the content is available.
+
+## Reason for reporting
+
+Explain why this content should be reviewed without reproducing harmful content.
+
+## Confirmation
+
+- [ ] I have not included private credentials, personal information, or illegal media in this report.`
+const CONTENT_REPORT_URL = `${REPOSITORY_URL}/issues/new?template=content-report.yml&title=${encodeURIComponent(CONTENT_REPORT_TITLE)}&body=${encodeURIComponent(CONTENT_REPORT_BODY)}`
 
 const SETTINGS_PAGES: Array<{
   id: Exclude<SettingsPage, 'main'>
