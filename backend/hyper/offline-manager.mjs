@@ -10,6 +10,8 @@ import {
 import { withHyperRuntimeForAddress } from './runtime.mjs'
 import { parseHyperUrl } from './url.mjs'
 
+const MAX_OFFLINE_SIZE_ENTRIES = 5000
+
 export function createHyperOfflineManager ({
   runWithRuntime,
   addWantedItem,
@@ -185,7 +187,7 @@ export function createHyperOfflineManager ({
         results.push(success(item, 'paused'))
       } else if (await hasItem(item)) {
         failedItems.delete(id)
-        results.push(success(item, 'available'))
+        results.push(success(item, 'available', await getAvailableSize(item)))
       } else if (failedItems.has(id)) {
         results.push({
           ok: false,
@@ -259,6 +261,34 @@ export function createHyperOfflineManager ({
     }
   }
 
+  async function getAvailableSize (item) {
+    try {
+      return await runWithRuntime(`hyper://${item.driveKey}/`, async (runtime) => {
+        const drive = await runtime.getDrive(`hyper://${item.driveKey}/`, { autoJoin: false })
+        let byteLength = 0
+        let entries = 0
+
+        for await (const entry of drive.list(item.path, { wait: false })) {
+          entries += 1
+          if (entries > MAX_OFFLINE_SIZE_ENTRIES) {
+            return { byteLength, sizeTruncated: true }
+          }
+          if (!entry?.value?.blob) continue
+          const entryBytes = Number(entry.value.blob.byteLength)
+          if (Number.isSafeInteger(entryBytes) && entryBytes > 0) {
+            byteLength = byteLength > Number.MAX_SAFE_INTEGER - entryBytes
+              ? Number.MAX_SAFE_INTEGER
+              : byteLength + entryBytes
+          }
+        }
+
+        return { byteLength, sizeTruncated: false }
+      })
+    } catch {
+      return { sizeUnavailable: true }
+    }
+  }
+
   async function findWantedItem (candidate) {
     const normalized = normalizeWantedHyperOfflineItem(candidate)
     if (!normalized) return null
@@ -294,8 +324,8 @@ export const removeHyperOffline = manager.remove
 export const resumeHyperOffline = manager.resume
 export const resumeWantedHyperOffline = manager.resumeAll
 
-function success (item, status) {
-  return { ok: true, item: { ...item, status } }
+function success (item, status, details = {}) {
+  return { ok: true, item: { ...item, status, ...details } }
 }
 
 function failure (error) {

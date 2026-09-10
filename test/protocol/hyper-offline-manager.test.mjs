@@ -106,6 +106,41 @@ test('reports an incomplete download as an error', async () => {
   assert.equal(listed.items[0].status, 'error')
 })
 
+test('reports the bounded content size of an available offline folder', async () => {
+  const drive = createDrive({
+    entries: [
+      { key: '/docs/one.txt', value: { blob: { byteLength: 10 } } },
+      { key: '/docs/two.txt', value: { blob: { byteLength: 20 } } },
+      { key: '/docs/link', value: { blob: null } }
+    ]
+  })
+  const harness = createHarness(drive, {
+    items: [{ driveKey: DRIVE_KEY, path: '/docs/', wantedAt: 1 }]
+  })
+
+  const result = await harness.manager.list()
+
+  assert.equal(result.items[0].status, 'available')
+  assert.equal(result.items[0].byteLength, 30)
+  assert.equal(result.items[0].sizeTruncated, false)
+})
+
+test('bounds offline size scans even for entries without blobs', async () => {
+  const entries = Array.from({ length: 5001 }, (_, index) => ({
+    key: `/docs/link-${index}`,
+    value: { blob: null }
+  }))
+  const drive = createDrive({ entries })
+  const harness = createHarness(drive, {
+    items: [{ driveKey: DRIVE_KEY, path: '/docs/', wantedAt: 1 }]
+  })
+
+  const result = await harness.manager.list()
+
+  assert.equal(result.items[0].byteLength, 0)
+  assert.equal(result.items[0].sizeTruncated, true)
+})
+
 test('closes every in-flight download without clearing wanted items', async () => {
   const pending = deferred()
   const drive = createDrive({
