@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { File, Paths } from 'expo-file-system'
 import * as DocumentPicker from 'expo-document-picker'
-import { useAudioPlayer } from 'expo-audio'
 import { ImageManipulator, SaveFormat } from 'expo-image-manipulator'
 import { useVideoPlayer, VideoView } from 'expo-video'
 import { SafeAreaView } from 'react-native-safe-area-context'
@@ -47,6 +46,7 @@ import {
   PEERCHAT_SEARCH_QUERY_MAX_CHARACTERS
 } from './message-search.mjs'
 import { normalizePeerChatMentionSpacing, splitPeerChatMentions } from './message-text.mjs'
+import { playPeerChatSound } from './sounds'
 import {
   createPeerChatEmojiEntries,
   filterPeerChatEmojiEntries,
@@ -269,8 +269,6 @@ export function PeerChatScreen ({
   const openingMessageScrollTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const mountedRef = useRef(true)
   const composerRoomKeyRef = useRef<string | null>(null)
-  const knownMessageIdsRef = useRef<Set<string>>(new Set())
-  const soundRoomKeyRef = useRef<string | null>(null)
   const uiStateRef = useRef<PeerChatUiState>(EMPTY_UI_STATE)
   const uiStateRestoredRef = useRef(false)
   const [isIntroReady, setIsIntroReady] = useState(false)
@@ -319,8 +317,6 @@ export function PeerChatScreen ({
   const [emojiSearchQuery, setEmojiSearchQuery] = useState('')
   const [landingAction, setLandingAction] = useState<LandingAction>(null)
   const [restoredUiState, setRestoredUiState] = useState<PeerChatUiState | null>(null)
-  const sendSoundPlayer = useAudioPlayer(require('../../assets/sounds/peerchat/send.mp3'))
-  const receiveSoundPlayer = useAudioPlayer(require('../../assets/sounds/peerchat/receive.mp3'))
   const mentionCandidates = getMentionCandidates(
     composer,
     activeRoom?.members || [],
@@ -338,13 +334,6 @@ export function PeerChatScreen ({
     () => filterPeerChatEmojiEntries(PEERCHAT_EMOJI_ENTRIES, emojiSearchQuery),
     [emojiSearchQuery]
   )
-
-  const playChatSound = useCallback((player: typeof sendSoundPlayer) => {
-    if (!soundsEnabled) return
-    void player.seekTo(0)
-      .then(() => player.play())
-      .catch((error) => console.warn('Unable to play PeerChat sound:', error))
-  }, [soundsEnabled])
 
   useEffect(() => {
     callRpcRef.current = onCallRpc
@@ -539,14 +528,7 @@ export function PeerChatScreen ({
       if (response.room) setActiveRoom(response.room)
       if (response.rooms) setRooms(response.rooms)
       if (Array.isArray(response.messages)) {
-        const isSameSoundRoom = soundRoomKeyRef.current === room.roomKey
-        const hasIncomingMessage = isSameSoundRoom && response.messages.some((message) => (
-          !message.self && !knownMessageIdsRef.current.has(message.id)
-        ))
-        soundRoomKeyRef.current = room.roomKey
-        knownMessageIdsRef.current = new Set(response.messages.map((message) => message.id))
         setMessages(response.messages)
-        if (hasIncomingMessage) playChatSound(receiveSoundPlayer)
       }
       if (Number.isSafeInteger(response.version)) versionRef.current = response.version as number
       setError(null)
@@ -557,7 +539,7 @@ export function PeerChatScreen ({
     } finally {
       pollInFlightRef.current = false
     }
-  }, [callRpc, playChatSound, receiveSoundPlayer])
+  }, [callRpc])
 
   useEffect(() => {
     if (!activeRoom) return
@@ -766,8 +748,6 @@ export function PeerChatScreen ({
     if (composerRoomKeyRef.current !== room.roomKey) setComposer('')
     composerRoomKeyRef.current = room.roomKey
     versionRef.current = -1
-    soundRoomKeyRef.current = null
-    knownMessageIdsRef.current = new Set()
     setMessages([])
     setReplyTarget(null)
     setIsSearching(false)
@@ -963,7 +943,7 @@ export function PeerChatScreen ({
       }
       versionRef.current = -1
       await refreshRoom(true)
-      playChatSound(sendSoundPlayer)
+      if (soundsEnabled) playPeerChatSound(require('../../assets/sounds/peerchat/send.mp3'))
       onStatus('PeerChat message sent')
     })
   }
@@ -1001,7 +981,7 @@ export function PeerChatScreen ({
       if (!response.ok) throw new Error(response.error || 'Unable to send attachment.')
       versionRef.current = -1
       await refreshRoom(true)
-      playChatSound(sendSoundPlayer)
+      if (soundsEnabled) playPeerChatSound(require('../../assets/sounds/peerchat/send.mp3'))
       onStatus(`Sent ${upload.item.name}`)
     })
   }

@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { useAudioPlayer } from 'expo-audio'
 import { File, Paths } from 'expo-file-system'
 import { AppState } from 'react-native'
 
@@ -17,6 +16,7 @@ import {
   preparePeerChatNotifications,
   requestPeerChatNotificationPermission
 } from './notifications'
+import { playPeerChatSound } from './sounds'
 
 type NotificationRoom = {
   roomKey: string
@@ -44,6 +44,7 @@ type NotificationPreferences = {
 
 const POLL_INTERVAL_MS = 5000
 const PREFERENCES_FILE = new File(Paths.document, 'peerchat-notifications.json')
+const RECEIVE_SOUND = require('../../assets/sounds/peerchat/receive.mp3')
 
 export function usePeerChatNotifications ({
   isPeerChatVisible,
@@ -64,7 +65,6 @@ export function usePeerChatNotifications ({
   const previousRoomsRef = useRef<NotificationRoom[] | null>(null)
   const pollInFlightRef = useRef(false)
   const warnedRef = useRef(false)
-  const receiveSoundPlayer = useAudioPlayer(require('../../assets/sounds/peerchat/receive.mp3'))
 
   callRpcRef.current = onCallRpc
   isPeerChatVisibleRef.current = isPeerChatVisible
@@ -138,10 +138,7 @@ export function usePeerChatNotifications ({
         const candidates = collectPeerChatNotificationCandidates(previousRooms, nextRooms)
         if (candidates.length === 0) return
         if (isPeerChatVisibleRef.current) {
-          if (preferencesRef.current.sounds) {
-            await receiveSoundPlayer.seekTo(0)
-            receiveSoundPlayer.play()
-          }
+          if (preferencesRef.current.sounds) playPeerChatSound(RECEIVE_SOUND)
           return
         }
         if (!preferencesRef.current.notifications || !await hasPeerChatNotificationPermission()) return
@@ -183,7 +180,7 @@ export function usePeerChatNotifications ({
       if (timer) clearTimeout(timer)
       subscription.remove()
     }
-  }, [isReady, isRuntimeReady, receiveSoundPlayer, shouldPoll])
+  }, [isReady, isRuntimeReady, shouldPoll])
 
   return {
     isReady,

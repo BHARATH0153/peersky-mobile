@@ -833,6 +833,44 @@ test('PeerChat bounds restored deduplication scans and stored room bytes', async
   await quotaService.close()
 })
 
+test('PeerChat rejects a duplicate message replayed after restart', async (t) => {
+  const storagePath = await mkdtemp(path.join(tmpdir(), 'peersky-peerchat-restored-dedup-'))
+  t.after(() => rm(storagePath, { recursive: true, force: true }))
+  const timestamp = Date.now()
+  const duplicate = {
+    id: 'desktop-message-before-restart',
+    roomKey: ROOM_KEY,
+    sender: 'desktop-peer',
+    sn: 'Desktop',
+    ...encryptPeerChatMessage('Already stored', ROOM_KEY),
+    ts: timestamp
+  }
+  await writeFile(path.join(storagePath, 'peerchat-mobile.json'), JSON.stringify({
+    profile: { username: 'Alice' },
+    rooms: [{
+      roomKey: ROOM_KEY,
+      name: 'Restored Room',
+      isHost: false,
+      joinedAt: timestamp - 1000,
+      unreadCount: 1
+    }]
+  }))
+
+  const restoredFeed = new FakeFeed([duplicate])
+  const service = await new PeerChatService({
+    sdk: createFakeSdk(new Map([[`chat-${ROOM_KEY}`, restoredFeed]])),
+    storagePath
+  }).start()
+  const peer = createFakePeer('de'.repeat(4), 'Desktop')
+  peer.initialSyncCount = 0
+
+  await service.handlePeerMessage(peer, { ...duplicate, type: 'sync' })
+
+  assert.equal(restoredFeed.length, 1)
+  assert.equal(service.listRooms()[0].unreadCount, 1)
+  await service.close()
+})
+
 function createFakeSdk (feeds = new Map(), publicKeyByte = 7) {
   const swarm = new EventEmitter()
   swarm.flush = async () => {}
