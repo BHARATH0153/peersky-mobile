@@ -170,6 +170,12 @@ type PeerChatMember = {
   online: boolean
 }
 
+type PeerChatMediaTarget = {
+  kind: 'image' | 'video'
+  label: string
+  uri: string
+}
+
 type PeerChatProfile = {
   id: string
   username: string
@@ -301,6 +307,8 @@ export function PeerChatScreen ({
   const [replyTarget, setReplyTarget] = useState<PeerChatReply | null>(null)
   const [messageActionTarget, setMessageActionTarget] = useState<PeerChatMessage | null>(null)
   const [roomActionTarget, setRoomActionTarget] = useState<PeerChatRoom | null>(null)
+  const [profileTarget, setProfileTarget] = useState<PeerChatMember | null>(null)
+  const [mediaTarget, setMediaTarget] = useState<PeerChatMediaTarget | null>(null)
   const [isConfirmingRoomLeave, setIsConfirmingRoomLeave] = useState(false)
   const [isMessageInfoVisible, setIsMessageInfoVisible] = useState(false)
   const [isSearching, setIsSearching] = useState(false)
@@ -828,6 +836,50 @@ export function PeerChatScreen ({
     })
   }
 
+  function openMessageSenderProfile (message: PeerChatMessage) {
+    const member = activeRoom?.members.find((candidate) => candidate.id === message.sender)
+    setProfileTarget(member || {
+      id: message.sender,
+      username: message.senderName,
+      bio: activeRoom?.isDM && activeRoom.dmWith === message.sender ? activeRoom.bio : '',
+      avatar: activeRoom?.isDM && activeRoom.dmWith === message.sender ? activeRoom.avatar : null,
+      self: message.self,
+      online: false
+    })
+  }
+
+  function viewProfileAvatar (member: PeerChatMember) {
+    if (!member.avatar) return
+    setProfileTarget(null)
+    setMediaTarget({ kind: 'image', label: `${member.username}'s avatar`, uri: member.avatar })
+  }
+
+  function openHeaderDetails () {
+    if (!activeRoom?.isDM) {
+      setShowRoomInfo(true)
+      return
+    }
+    const peer = activeRoom.members.find((member) => !member.self && (
+      !activeRoom.dmWith || member.id === activeRoom.dmWith
+    ))
+    if (peer) {
+      setProfileTarget(peer)
+      return
+    }
+    if (activeRoom.dmWith) {
+      setProfileTarget({
+        id: activeRoom.dmWith,
+        username: activeRoom.name,
+        bio: activeRoom.bio,
+        avatar: activeRoom.avatar,
+        self: false,
+        online: false
+      })
+      return
+    }
+    setShowRoomInfo(true)
+  }
+
   function respondToDirectMessage (invite: PeerChatDirectInvite, accept: boolean) {
     if (isBusy) return
     void runAction(async () => {
@@ -1141,9 +1193,9 @@ export function PeerChatScreen ({
             <BackIcon width={CHAT_HEADER_ICON_SIZE} height={CHAT_HEADER_ICON_SIZE} color={colors.accent} />
           </Pressable>
           <Pressable
-            accessibilityHint='Opens room information'
+            accessibilityHint={activeRoom.isDM ? 'Opens peer profile' : 'Opens room information'}
             accessibilityRole='button'
-            onPress={() => setShowRoomInfo(true)}
+            onPress={openHeaderDetails}
             style={styles.chatHeaderCopy}
           >
             {activeRoom.avatar
@@ -1321,11 +1373,10 @@ export function PeerChatScreen ({
                 />
                 {visibleMembers.map((member) => (
                   <Pressable
-                    accessibilityHint='Starts a private conversation'
+                    accessibilityHint='Opens peer profile'
                     accessibilityRole='button'
-                    disabled={member.self}
                     key={member.id}
-                    onPress={() => !member.self && startDirectMessage(member)}
+                    onPress={() => setProfileTarget(member)}
                     style={[styles.memberRow, { backgroundColor: colors.input }]}
                   >
                     <View style={styles.memberAvatarWrap}>
@@ -1480,7 +1531,14 @@ export function PeerChatScreen ({
                 ]}
               >
                 {!item.self && !item.system && (
-                  <Text style={[styles.senderName, { color: colors.accent }]}>{item.senderName}</Text>
+                  <Pressable
+                    accessibilityHint={`Opens ${item.senderName}'s profile`}
+                    accessibilityRole='button'
+                    hitSlop={4}
+                    onPress={() => openMessageSenderProfile(item)}
+                  >
+                    <Text style={[styles.senderName, { color: colors.accent }]}>{item.senderName}</Text>
+                  </Pressable>
                 )}
                 {item.replyTo && (
                   <View style={[styles.quotedReply, { borderLeftColor: colors.accent, backgroundColor: colors.input }]}>
@@ -1499,6 +1557,7 @@ export function PeerChatScreen ({
                       item={item}
                       onCallRpc={callRpc}
                       onOpenUrl={onOpenUrl}
+                      onViewMedia={setMediaTarget}
                     />
                     )
                   : (
@@ -1807,6 +1866,20 @@ export function PeerChatScreen ({
             )}
           </View>
         </Modal>
+        <PeerProfileModal
+          colors={colors}
+          member={profileTarget}
+          onClose={() => setProfileTarget(null)}
+          onMessage={(member) => {
+            setProfileTarget(null)
+            startDirectMessage(member)
+          }}
+          onViewAvatar={viewProfileAvatar}
+        />
+        <PeerChatMediaViewer
+          onClose={() => setMediaTarget(null)}
+          target={mediaTarget}
+        />
       </View>
     )
   }
@@ -1835,9 +1908,22 @@ export function PeerChatScreen ({
           </View>
 
           <Pressable
-            accessibilityHint='Opens PeerChat profile settings'
+            accessibilityHint='Opens your PeerChat profile'
             accessibilityRole='button'
-            onPress={openPeerChatSettings}
+            onPress={() => {
+              if (!profile?.username) {
+                openPeerChatSettings()
+                return
+              }
+              setProfileTarget({
+                id: profile.id,
+                username: profile.username,
+                bio: profile.bio || '',
+                avatar: profile.avatar || null,
+                self: true,
+                online: true
+              })
+            }}
             style={styles.profileSummary}
           >
             {profileAvatar
@@ -2230,6 +2316,20 @@ export function PeerChatScreen ({
         </View>
       )}
       />
+      <PeerProfileModal
+        colors={colors}
+        member={profileTarget}
+        onClose={() => setProfileTarget(null)}
+        onMessage={(member) => {
+          setProfileTarget(null)
+          startDirectMessage(member)
+        }}
+        onViewAvatar={viewProfileAvatar}
+      />
+      <PeerChatMediaViewer
+        onClose={() => setMediaTarget(null)}
+        target={mediaTarget}
+      />
       <Modal
         animationType='fade'
         onRequestClose={() => {
@@ -2350,12 +2450,14 @@ function PeerChatAttachment ({
   colors,
   item,
   onCallRpc,
-  onOpenUrl
+  onOpenUrl,
+  onViewMedia
 }: {
   colors: typeof lightColors
   item: PeerChatMessage
   onCallRpc: (command: number, data?: object) => Promise<PeerChatResponse>
   onOpenUrl: (url: string) => void
+  onViewMedia: (target: PeerChatMediaTarget) => void
 }) {
   const mediaKind = getPeerChatAttachmentMediaKind(item.fileName || '', item.message)
   const canPreview = mediaKind !== null && Number.isFinite(item.fileSize) &&
@@ -2383,9 +2485,13 @@ function PeerChatAttachment ({
   if (mediaUrl && mediaKind === 'image') {
     return (
       <Pressable
-        accessibilityHint='Opens this image in the browser'
+        accessibilityHint='Opens this image full screen'
         accessibilityRole='imagebutton'
-        onPress={() => onOpenUrl(item.message)}
+        onPress={() => onViewMedia({
+          kind: 'image',
+          label: item.fileName || 'Image attachment',
+          uri: mediaUrl
+        })}
         style={[styles.inlineMediaCard, { borderColor: colors.muted }]}
       >
         <Image resizeMode='cover' source={{ uri: mediaUrl }} style={styles.inlineMediaImage} />
@@ -2398,7 +2504,15 @@ function PeerChatAttachment ({
     return (
       <View style={[styles.inlineMediaCard, { borderColor: colors.muted }]}>
         <PeerChatVideo mediaUrl={mediaUrl} />
-        <Pressable accessibilityRole='link' onPress={() => onOpenUrl(item.message)}>
+        <Pressable
+          accessibilityHint='Opens this video full screen'
+          accessibilityRole='button'
+          onPress={() => onViewMedia({
+            kind: 'video',
+            label: item.fileName || 'Video attachment',
+            uri: mediaUrl
+          })}
+        >
           <AttachmentCaption colors={colors} inline item={item} />
         </Pressable>
       </View>
@@ -2418,16 +2532,133 @@ function PeerChatAttachment ({
   )
 }
 
-function PeerChatVideo ({ mediaUrl }: { mediaUrl: string }) {
+function PeerChatVideo ({ fullScreen = false, mediaUrl }: { fullScreen?: boolean, mediaUrl: string }) {
   const player = useVideoPlayer(mediaUrl)
   return (
     <VideoView
       contentFit='contain'
       nativeControls
       player={player}
-      style={styles.inlineMediaVideo}
+      style={fullScreen ? styles.fullScreenMedia : styles.inlineMediaVideo}
       surfaceType={Platform.OS === 'android' ? 'textureView' : undefined}
     />
+  )
+}
+
+function PeerProfileModal ({
+  colors,
+  member,
+  onClose,
+  onMessage,
+  onViewAvatar
+}: {
+  colors: typeof lightColors
+  member: PeerChatMember | null
+  onClose: () => void
+  onMessage: (member: PeerChatMember) => void
+  onViewAvatar: (member: PeerChatMember) => void
+}) {
+  return (
+    <Modal
+      animationType='fade'
+      onRequestClose={onClose}
+      statusBarTranslucent
+      transparent
+      visible={member !== null}
+    >
+      <View accessibilityViewIsModal style={styles.profileModalRoot}>
+        <Pressable
+          accessibilityLabel='Close peer profile'
+          accessibilityRole='button'
+          onPress={onClose}
+          style={styles.roomInfoBackdrop}
+        />
+        {member && (
+          <SafeAreaView
+            edges={['bottom', 'left', 'right']}
+            style={[styles.peerProfileCard, { backgroundColor: colors.surface }]}
+          >
+            <Pressable
+              accessibilityLabel='Close peer profile'
+              accessibilityRole='button'
+              hitSlop={8}
+              onPress={onClose}
+              style={styles.peerProfileClose}
+            >
+              <CloseIcon width={18} height={18} color={colors.muted} />
+            </Pressable>
+            <Pressable
+              accessibilityHint={member.avatar ? 'Opens avatar full screen' : undefined}
+              accessibilityRole={member.avatar ? 'imagebutton' : 'image'}
+              disabled={!member.avatar}
+              onPress={() => onViewAvatar(member)}
+            >
+              {member.avatar
+                ? <Image source={{ uri: member.avatar }} style={styles.peerProfileAvatar} />
+                : (
+                  <View style={[styles.peerProfileAvatar, styles.profileAvatarFallback, { backgroundColor: colors.accentSoft }]}>
+                    <Text style={[styles.peerProfileInitials, { color: colors.accent }]}>{getRoomInitials(member.username)}</Text>
+                  </View>
+                  )}
+            </Pressable>
+            <Text style={[styles.peerProfileName, { color: colors.text }]}>{member.username}</Text>
+            <Text style={[styles.peerProfileStatus, { color: member.online ? colors.success : colors.muted }]}>
+              {member.self ? 'You' : member.online ? 'Online' : 'Offline'}
+            </Text>
+            <Text style={[styles.peerProfileBio, { color: colors.muted }]}>
+              {member.bio || 'No bio shared.'}
+            </Text>
+            {!member.self && (
+              <Pressable
+                accessibilityRole='button'
+                onPress={() => onMessage(member)}
+                style={[styles.peerProfileMessage, { backgroundColor: colors.accent }]}
+              >
+                <Text style={styles.profileSaveText}>Message</Text>
+              </Pressable>
+            )}
+          </SafeAreaView>
+        )}
+      </View>
+    </Modal>
+  )
+}
+
+function PeerChatMediaViewer ({
+  onClose,
+  target
+}: {
+  onClose: () => void
+  target: PeerChatMediaTarget | null
+}) {
+  return (
+    <Modal
+      animationType='fade'
+      onRequestClose={onClose}
+      statusBarTranslucent
+      visible={target !== null}
+    >
+      <SafeAreaView edges={['top', 'bottom', 'left', 'right']} style={styles.mediaViewer}>
+        <View style={styles.mediaViewerHeader}>
+          <Text numberOfLines={1} style={styles.mediaViewerTitle}>{target?.label}</Text>
+          <Pressable
+            accessibilityLabel='Close media viewer'
+            accessibilityRole='button'
+            hitSlop={8}
+            onPress={onClose}
+            style={styles.mediaViewerClose}
+          >
+            <CloseIcon width={22} height={22} color='#f2f3f7' />
+          </Pressable>
+        </View>
+        <View style={styles.mediaViewerContent}>
+          {target?.kind === 'image' && (
+            <Image resizeMode='contain' source={{ uri: target.uri }} style={styles.fullScreenMedia} />
+          )}
+          {target?.kind === 'video' && <PeerChatVideo fullScreen mediaUrl={target.uri} />}
+        </View>
+      </SafeAreaView>
+    </Modal>
   )
 }
 
@@ -2673,6 +2904,15 @@ const styles = StyleSheet.create({
   roomInfoTitle: { fontSize: 15, fontWeight: '800' },
   roomInfoLink: { fontSize: 12, textDecorationLine: 'underline' },
   roomInfoSave: { alignItems: 'center', alignSelf: 'center', borderRadius: 9, minHeight: 38, justifyContent: 'center', paddingHorizontal: 14 },
+  profileModalRoot: { alignItems: 'center', flex: 1, justifyContent: 'center', paddingHorizontal: 24 },
+  peerProfileCard: { alignItems: 'center', borderRadius: 18, elevation: 12, maxWidth: 360, padding: 24, width: '100%' },
+  peerProfileClose: { alignItems: 'center', height: 36, justifyContent: 'center', position: 'absolute', right: 8, top: 8, width: 36 },
+  peerProfileAvatar: { borderRadius: 48, height: 96, width: 96 },
+  peerProfileInitials: { fontSize: 27, fontWeight: '900' },
+  peerProfileName: { fontSize: 20, fontWeight: '900', marginTop: 13, textAlign: 'center' },
+  peerProfileStatus: { fontSize: 12, fontWeight: '700', marginTop: 3 },
+  peerProfileBio: { fontSize: 13, lineHeight: 19, marginTop: 10, textAlign: 'center' },
+  peerProfileMessage: { alignItems: 'center', borderRadius: 10, justifyContent: 'center', marginTop: 18, minHeight: 42, paddingHorizontal: 28 },
   avatarEditor: { alignItems: 'center', alignSelf: 'flex-start', flexDirection: 'row', gap: 8, minHeight: 38 },
   avatarEditorImage: { borderRadius: 18, height: 36, width: 36 },
   memberList: { gap: 6, marginTop: 2 },
@@ -2722,6 +2962,12 @@ const styles = StyleSheet.create({
   inlineMediaCard: { borderRadius: 10, borderWidth: 1, maxWidth: 260, overflow: 'hidden', width: 240 },
   inlineMediaImage: { height: 170, width: '100%' },
   inlineMediaVideo: { height: 180, width: '100%' },
+  mediaViewer: { backgroundColor: '#090a0d', flex: 1 },
+  mediaViewerHeader: { alignItems: 'center', flexDirection: 'row', minHeight: 52, paddingHorizontal: 12 },
+  mediaViewerTitle: { color: '#f2f3f7', flex: 1, fontSize: 14, fontWeight: '700' },
+  mediaViewerClose: { alignItems: 'center', height: 40, justifyContent: 'center', width: 40 },
+  mediaViewerContent: { flex: 1 },
+  fullScreenMedia: { height: '100%', width: '100%' },
   inlineMediaCaption: { paddingHorizontal: 9, paddingVertical: 8 },
   attachmentIcon: { fontSize: 24, fontWeight: '500' },
   attachmentCopy: { flex: 1 },
