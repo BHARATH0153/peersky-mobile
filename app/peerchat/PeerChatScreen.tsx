@@ -254,6 +254,8 @@ export function PeerChatScreen ({
   const actionInFlightRef = useRef(false)
   const unreadScrollPendingRef = useRef(false)
   const isNearMessageBottomRef = useRef(true)
+  const openingMessageScrollRef = useRef(false)
+  const openingMessageScrollTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const mountedRef = useRef(true)
   const composerRoomKeyRef = useRef<string | null>(null)
   const knownMessageIdsRef = useRef<Set<string>>(new Set())
@@ -384,6 +386,7 @@ export function PeerChatScreen ({
     return () => {
       if (uiStateRestoredRef.current) persistPeerChatUiState(uiStateRef.current)
       void callRpcRef.current(RPC_PEERCHAT_SET_ACTIVE, { roomKey: null }).catch(() => {})
+      if (openingMessageScrollTimerRef.current) clearTimeout(openingMessageScrollTimerRef.current)
       mountedRef.current = false
       activeRoomRef.current = null
     }
@@ -748,6 +751,8 @@ export function PeerChatScreen ({
   function captureUnreadBoundary () {
     unreadScrollPendingRef.current = false
     isNearMessageBottomRef.current = true
+    openingMessageScrollRef.current = true
+    if (openingMessageScrollTimerRef.current) clearTimeout(openingMessageScrollTimerRef.current)
     setShowScrollToLatest(false)
     setNewMessagesAfter(null)
   }
@@ -1384,12 +1389,19 @@ export function PeerChatScreen ({
               isNearMessageBottomRef.current = false
               setShowScrollToLatest(true)
               messageListRef.current?.scrollToIndex({ animated: false, index: firstUnreadIndex, viewPosition: 0 })
+            } else if (openingMessageScrollRef.current) {
+              messageListRef.current?.scrollToEnd({ animated: false })
+              if (openingMessageScrollTimerRef.current) clearTimeout(openingMessageScrollTimerRef.current)
+              openingMessageScrollTimerRef.current = setTimeout(() => {
+                openingMessageScrollRef.current = false
+                openingMessageScrollTimerRef.current = null
+              }, 300)
             } else if (isNearMessageBottomRef.current) {
               messageListRef.current?.scrollToEnd({ animated: false })
             }
           }}
           onScroll={({ nativeEvent }) => {
-            if (isSearching || unreadScrollPendingRef.current) return
+            if (isSearching || unreadScrollPendingRef.current || openingMessageScrollRef.current) return
             const nearBottom = isPeerChatNearBottom({
               contentHeight: nativeEvent.contentSize.height,
               viewportHeight: nativeEvent.layoutMeasurement.height,
@@ -1398,6 +1410,11 @@ export function PeerChatScreen ({
             if (nearBottom === isNearMessageBottomRef.current) return
             isNearMessageBottomRef.current = nearBottom
             setShowScrollToLatest(!nearBottom)
+          }}
+          onScrollBeginDrag={() => {
+            openingMessageScrollRef.current = false
+            if (openingMessageScrollTimerRef.current) clearTimeout(openingMessageScrollTimerRef.current)
+            openingMessageScrollTimerRef.current = null
           }}
           scrollEventThrottle={100}
           onScrollToIndexFailed={({ averageItemLength, index }) => {
@@ -1514,10 +1531,10 @@ export function PeerChatScreen ({
                     ))}
                   </View>
                 )}
-                <Text style={[styles.messageTime, item.system ? styles.systemMessageTime : null, { color: colors.muted }]}>
-                  {formatMessageTime(item.timestamp)}
-                </Text>
               </Pressable>
+              <Text style={[styles.messageTime, item.system ? styles.systemMessageTime : null, { color: colors.muted }]}>
+                {formatMessageTime(item.timestamp)}
+              </Text>
               </View>
               </>
             )
@@ -1899,6 +1916,7 @@ export function PeerChatScreen ({
                       {soundsEnabled ? 'On' : 'Off'}
                     </Text>
                   </Pressable>
+                  {error && <Text accessibilityRole='alert' style={[styles.modalError, { color: colors.danger }]}>{error}</Text>}
                   {(profile?.username !== profileName.trim() ||
                     (profile?.bio || '') !== profileBio.trim() ||
                     (profile?.avatar || null) !== profileAvatar ||
@@ -2320,7 +2338,7 @@ function PeerChatAttachment ({
         accessibilityHint='Opens this image in the browser'
         accessibilityRole='imagebutton'
         onPress={() => onOpenUrl(item.message)}
-        style={[styles.inlineMediaCard, { borderColor: colors.border }]}
+        style={[styles.inlineMediaCard, { borderColor: colors.muted }]}
       >
         <Image resizeMode='cover' source={{ uri: mediaUrl }} style={styles.inlineMediaImage} />
         <AttachmentCaption colors={colors} inline item={item} />
@@ -2330,7 +2348,7 @@ function PeerChatAttachment ({
 
   if (mediaUrl && mediaKind === 'video') {
     return (
-      <View style={[styles.inlineMediaCard, { borderColor: colors.border }]}>
+      <View style={[styles.inlineMediaCard, { borderColor: colors.muted }]}>
         <PeerChatVideo mediaUrl={mediaUrl} />
         <Pressable accessibilityRole='link' onPress={() => onOpenUrl(item.message)}>
           <AttachmentCaption colors={colors} inline item={item} />
@@ -2344,7 +2362,7 @@ function PeerChatAttachment ({
       accessibilityHint='Opens this Hyperdrive attachment'
       accessibilityRole='link'
       onPress={() => onOpenUrl(item.message)}
-      style={[styles.attachmentCard, { backgroundColor: colors.input, borderColor: colors.border }]}
+      style={[styles.attachmentCard, { backgroundColor: colors.input, borderColor: colors.muted }]}
     >
       <Text style={[styles.attachmentIcon, { color: colors.accent }]}>+</Text>
       <AttachmentCaption colors={colors} item={item} />
@@ -2553,10 +2571,11 @@ const styles = StyleSheet.create({
   bioInput: { maxHeight: 92, minHeight: 52, textAlignVertical: 'top' },
   profileSaveButton: { alignItems: 'center', borderRadius: 10, justifyContent: 'center', minHeight: 42, paddingHorizontal: 14 },
   profileSaveText: { color: '#ffffff', fontSize: 13, fontWeight: '800' },
+  modalError: { fontSize: 12, lineHeight: 17, textAlign: 'center' },
   input: { borderRadius: 10, borderWidth: 0, fontSize: 14, minHeight: 42, paddingHorizontal: 12, paddingVertical: 9 },
   roomKeyInput: { fontFamily: 'monospace', fontSize: 13 },
   quickActions: { flexDirection: 'row', gap: 10 },
-  quickAction: { alignItems: 'center', borderRadius: 12, flex: 1, flexDirection: 'row', gap: 8, justifyContent: 'center', minHeight: 48, paddingHorizontal: 10 },
+  quickAction: { alignItems: 'center', borderRadius: 12, flex: 1, flexDirection: 'row', gap: 6, justifyContent: 'center', minHeight: 42, paddingHorizontal: 8 },
   quickActionSymbol: { fontSize: 20, fontWeight: '500' },
   quickActionText: { fontSize: 14, fontWeight: '800' },
   actionPanel: { alignItems: 'center', borderRadius: 12, flexDirection: 'row', gap: 8, padding: 8 },
