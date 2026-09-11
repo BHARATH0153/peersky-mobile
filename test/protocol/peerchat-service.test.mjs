@@ -13,8 +13,43 @@ import {
   derivePeerChatTopic,
   encryptPeerChatMessage
 } from '../../backend/peerchat/protocol.mjs'
+import { PRE_JOINED_PEERCHAT_ROOM_KEY } from '../../backend/peerchat/rooms.mjs'
 
 const ROOM_KEY = 'ab'.repeat(32)
+
+test('PeerChat onboarding prejoins the welcome room before saving a unique profile', async (t) => {
+  const storagePath = await mkdtemp(path.join(tmpdir(), 'peersky-peerchat-onboarding-'))
+  t.after(() => rm(storagePath, { recursive: true, force: true }))
+  const sdk = createFakeSdk()
+  const service = await new PeerChatService({ sdk, storagePath }).start()
+
+  const result = await service.completeOnboarding({ username: 'Alice Mobile', bio: 'Hello' })
+
+  assert.equal(result.profile.username, 'Alice Mobile')
+  assert.equal(result.profile.bio, 'Hello')
+  assert.equal(result.rooms.length, 1)
+  assert.equal(result.rooms[0].roomKey, PRE_JOINED_PEERCHAT_ROOM_KEY)
+  assert.equal(result.rooms[0].lastMessage, null)
+  assert.deepEqual(sdk.joined, [derivePeerChatTopic(PRE_JOINED_PEERCHAT_ROOM_KEY).toString('hex')])
+  await service.close()
+})
+
+test('PeerChat onboarding rejects a username already known in the welcome room', async (t) => {
+  const storagePath = await mkdtemp(path.join(tmpdir(), 'peersky-peerchat-onboarding-name-'))
+  t.after(() => rm(storagePath, { recursive: true, force: true }))
+  const service = await new PeerChatService({ sdk: createFakeSdk(), storagePath }).start()
+  const peer = createFakePeer('desktop', 'Alice')
+  peer.rooms = [PRE_JOINED_PEERCHAT_ROOM_KEY]
+  service.peers.set(peer.connection, peer)
+
+  await assert.rejects(
+    service.completeOnboarding({ username: 'alice' }),
+    /Username is already taken/
+  )
+  assert.equal(service.getProfile().username, '')
+  assert.equal(service.listRooms()[0].roomKey, PRE_JOINED_PEERCHAT_ROOM_KEY)
+  await service.close()
+})
 
 test('PeerChat persists basic rooms and returns version-aware message snapshots', async (t) => {
   const storagePath = await mkdtemp(path.join(tmpdir(), 'peersky-peerchat-'))

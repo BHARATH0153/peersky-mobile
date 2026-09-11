@@ -39,7 +39,8 @@ import {
   RPC_PEERCHAT_ROOM_UPDATE,
   RPC_PEERCHAT_DM_CREATE,
   RPC_PEERCHAT_DM_ACCEPT,
-  RPC_PEERCHAT_DM_REJECT
+  RPC_PEERCHAT_DM_REJECT,
+  RPC_PEERCHAT_ONBOARD
 } from './commands.mjs'
 import {
   getDefaultIdentityStoragePath,
@@ -350,6 +351,15 @@ export async function routeRpcRequest (req) {
       replyJson(req, {
         ok: true,
         profile: peerChat.setProfile(parseJsonMessage(req.data))
+      })
+      return
+    }
+
+    if (req.command === RPC_PEERCHAT_ONBOARD) {
+      const peerChat = await getPeerChatService()
+      replyJson(req, {
+        ok: true,
+        ...await peerChat.completeOnboarding(parseJsonMessage(req.data))
       })
       return
     }

@@ -47,6 +47,7 @@ import {
   peerChatTopicHex
 } from './protocol.mjs'
 import { attachPeerChatTransport } from './transport.mjs'
+import { PRE_JOINED_PEERCHAT_ROOM_KEY } from './rooms.mjs'
 
 const MAX_ROOMS = 50
 const MAX_RETURNED_MESSAGES = 200
@@ -154,6 +155,31 @@ export class PeerChatService {
     return this.getProfile()
   }
 
+  async completeOnboarding ({ username, bio, avatar, linkPreview } = {}) {
+    if (this.profile.username) throw new Error('PeerChat profile is already set.')
+    const normalizedUsername = normalizePeerChatProfileName(username)
+    if (!normalizedUsername) {
+      throw new Error('Name may only contain letters, numbers, and spaces (max 50 characters).')
+    }
+
+    try {
+      await this.joinRoomWithoutProfile(PRE_JOINED_PEERCHAT_ROOM_KEY)
+    } catch {}
+
+    const lowerUsername = normalizedUsername.toLowerCase()
+    const usernameTaken = [...this.peers.values()].some((peer) => (
+      normalizePeerChatProfileName(peer.username).toLowerCase() === lowerUsername
+    ))
+    if (usernameTaken) throw new Error('Username is already taken. Please choose a different one.')
+
+    const profile = this.setProfile({ username: normalizedUsername, bio, avatar, linkPreview })
+    const welcomeRoom = this.rooms.get(PRE_JOINED_PEERCHAT_ROOM_KEY)
+    if (welcomeRoom) welcomeRoom.lastMessage = null
+    this.schedulePersist()
+
+    return { profile, rooms: this.listRooms() }
+  }
+
   async createRoom ({ name, username, bio, link, avatar, moderation }) {
     this.ensureProfile(username)
     if (this.rooms.size >= MAX_ROOMS) throw new Error(`PeerChat supports up to ${MAX_ROOMS} rooms.`)
@@ -198,6 +224,10 @@ export class PeerChatService {
 
   async joinRoom ({ roomKey, username }) {
     this.ensureProfile(username)
+    return this.joinRoomWithoutProfile(roomKey)
+  }
+
+  async joinRoomWithoutProfile (roomKey) {
     const normalized = normalizePeerChatRoomKey(roomKey)
     if (!normalized) throw new Error('Enter a valid 64-character PeerChat room key.')
 

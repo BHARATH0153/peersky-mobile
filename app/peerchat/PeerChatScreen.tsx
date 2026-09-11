@@ -64,6 +64,7 @@ import {
   RPC_PEERCHAT_DM_CREATE,
   RPC_PEERCHAT_DM_REJECT,
   RPC_PEERCHAT_INIT,
+  RPC_PEERCHAT_ONBOARD,
   RPC_PEERCHAT_PROFILE_SET,
   RPC_PEERCHAT_ROOM_CREATE,
   RPC_PEERCHAT_ROOM_JOIN,
@@ -1142,7 +1143,22 @@ export function PeerChatScreen ({
   function completeProfileOnboarding () {
     if (!profileName.trim() || isBusy) return
     void runAction(async () => {
-      await saveProfile()
+      const response = await callRpc(RPC_PEERCHAT_ONBOARD, {
+        username: profileName,
+        bio: profileBio,
+        avatar: profileAvatar,
+        linkPreview: linkPreviewsEnabled
+      })
+      if (!response.ok || !response.profile || !response.rooms) {
+        throw new Error(response.error || 'Unable to create PeerChat profile.')
+      }
+      if (!mountedRef.current) return
+      setProfile(response.profile)
+      setProfileName(response.profile.username)
+      setProfileBio(response.profile.bio || '')
+      setProfileAvatar(response.profile.avatar || null)
+      setLinkPreviewsEnabled(response.profile.linkPreview !== false)
+      setRooms(response.rooms)
       onStatus('PeerChat profile created')
     })
   }
