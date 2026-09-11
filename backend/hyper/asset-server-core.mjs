@@ -9,9 +9,11 @@ import {
 import { parseHyperUrl } from './url.mjs'
 
 const HYPER_ASSET_HOST = '127.0.0.1'
+const HYPER_MEDIA_WINDOW_BYTES = 4 * 1024 * 1024
 
 export function createHyperAssetServer ({
   fetch,
+  fetchRange,
   httpImpl,
   authToken
 }) {
@@ -23,11 +25,11 @@ export function createHyperAssetServer ({
   }
 
   return httpImpl.createServer((req, res) => {
-    handleHyperAssetRequest(req, res, fetch, authToken)
+    handleHyperAssetRequest(req, res, fetch, fetchRange, authToken)
   })
 }
 
-function handleHyperAssetRequest (req, res, fetch, authToken) {
+function handleHyperAssetRequest (req, res, fetch, fetchRange, authToken) {
   const requestUrl = new URL(String(req.url || '/'), `http://${HYPER_ASSET_HOST}`)
   if (requestUrl.pathname !== '/asset') {
     sendAssetText(res, 404, 'Not found')
@@ -63,40 +65,63 @@ function handleHyperAssetRequest (req, res, fetch, authToken) {
   const downloadName = requestUrl.searchParams.has('download')
     ? normalizeDownloadFilename(requestUrl.searchParams.get('name'), assetUrl)
     : null
-
-  streamHyperAsset(fetch, assetUrl, req, res, downloadName)
+  streamHyperAsset(fetch, fetchRange, assetUrl, req, res, downloadName)
     .catch((error) => {
+      if (req.aborted || res.destroyed) return
       sendAssetError(res, error)
     })
 }
 
-async function streamHyperAsset (fetch, assetUrl, req, res, downloadName) {
+async function streamHyperAsset (fetch, fetchRange, assetUrl, req, res, downloadName) {
   const rangeHeader = getRequestHeader(req, 'range')
   if (isMalformedRangeHeader(rangeHeader)) {
     sendAssetEmpty(res, 416)
     return
   }
 
-  const response = await fetch(assetUrl, rangeHeader
+  let response = await fetch(assetUrl, rangeHeader
     ? { headers: new Headers([['Range', String(rangeHeader)]]) }
     : undefined)
 
-  if (!response.ok) {
-    throw createHttpError(response.status || 502, response.statusText || 'Unable to fetch Hyper asset')
+  if (req.aborted || res.destroyed) {
+    await cancelResponseBody(response.body)
+    return
   }
 
-  const headers = headersToObject(response.headers)
-  const status = rangeHeader && headers['content-range'] ? 206 : response.status
-  const inferredContentType = getContentTypeFromUrl(assetUrl)
-  const upstreamContentType = String(headers['content-type'] || '')
-  const inferredIsMedia = /^(?:audio|image|video)\//i.test(inferredContentType)
-  const upstreamIsMedia = /^(?:audio|image|video)\//i.test(upstreamContentType)
-  const contentType = !upstreamContentType ||
-    /^application\/octet-stream(?:\s*;|$)/i.test(upstreamContentType) ||
-    (inferredIsMedia && !upstreamIsMedia)
-    ? inferredContentType
-    : upstreamContentType
+  assertSuccessfulAssetResponse(response)
 
+  let headers = headersToObject(response.headers)
+  const inferredContentType = getContentTypeFromUrl(assetUrl)
+  let contentType = getProxyContentType(headers, inferredContentType)
+
+  const mediaWindowRange = getMediaWindowRange({
+    contentType,
+    downloadName,
+    method: req.method,
+    rangeHeader,
+    headers
+  })
+  if (mediaWindowRange) {
+    await cancelResponseBody(response.body)
+    response = typeof fetchRange === 'function'
+      ? await fetchRange(assetUrl, mediaWindowRange)
+      : await fetch(assetUrl, {
+        headers: new Headers([['Range', mediaWindowRange]])
+      })
+    if (req.aborted || res.destroyed) {
+      await cancelResponseBody(response.body)
+      return
+    }
+    assertSuccessfulAssetResponse(response)
+    headers = headersToObject(response.headers)
+    contentType = getProxyContentType(headers, inferredContentType)
+    if (isOversizedMediaResponse(headers)) {
+      await cancelResponseBody(response.body)
+      throw createHttpError(502, 'Hyper media server ignored the bounded range request')
+    }
+  }
+
+  const status = headers['content-range'] ? 206 : response.status
   if (isStreamableBody(response.body)) {
     sendProxyAssetHeaders(res, {
       status,
@@ -111,11 +136,84 @@ async function streamHyperAsset (fetch, assetUrl, req, res, downloadName) {
       return
     }
 
-    await writeResponseBody(res, response.body)
+    await writeResponseBody(req, res, response.body)
     return
   }
 
   throw createHttpError(502, 'Hyper asset response is not streamable')
+}
+
+function assertSuccessfulAssetResponse (response) {
+  if (!response.ok) {
+    throw createHttpError(response.status || 502, response.statusText || 'Unable to fetch Hyper asset')
+  }
+}
+
+function getProxyContentType (headers, inferredContentType) {
+  const upstreamContentType = String(headers['content-type'] || '')
+  const inferredIsMedia = /^(?:audio|image|video)\//i.test(inferredContentType)
+  const upstreamIsMedia = /^(?:audio|image|video)\//i.test(upstreamContentType)
+  return !upstreamContentType ||
+    /^application\/octet-stream(?:\s*;|$)/i.test(upstreamContentType) ||
+    (inferredIsMedia && !upstreamIsMedia)
+    ? inferredContentType
+    : upstreamContentType
+}
+
+function getMediaWindowRange ({
+  contentType,
+  downloadName,
+  method,
+  rangeHeader,
+  headers
+}) {
+  if (method !== 'GET' || downloadName) return null
+  if (!/^(?:audio|video)\//i.test(contentType)) return null
+
+  const contentLength = Number(headers['content-length'])
+  const responseIsBounded = Number.isSafeInteger(contentLength) &&
+    contentLength <= HYPER_MEDIA_WINDOW_BYTES
+  const requestedRange = parseMediaRange(rangeHeader)
+  if (responseIsBounded) return null
+
+  if (requestedRange?.suffixLength) {
+    return `bytes=-${Math.min(requestedRange.suffixLength, HYPER_MEDIA_WINDOW_BYTES)}`
+  }
+
+  const start = requestedRange?.start || 0
+  const totalLength = getAssetTotalLength(headers, rangeHeader)
+  const end = Number.isSafeInteger(totalLength)
+    ? Math.min(totalLength - 1, start + HYPER_MEDIA_WINDOW_BYTES - 1)
+    : start + HYPER_MEDIA_WINDOW_BYTES - 1
+  return end >= start ? `bytes=${start}-${end}` : null
+}
+
+function parseMediaRange (rangeHeader) {
+  if (!rangeHeader) return null
+
+  const range = String(rangeHeader).match(/^bytes=(?:(\d+)-(\d*)|-(\d+))$/i)
+  if (!range) return null
+  if (range[3]) {
+    const suffixLength = Number(range[3])
+    return Number.isSafeInteger(suffixLength) ? { suffixLength } : null
+  }
+
+  const start = Number(range[1])
+  return Number.isSafeInteger(start) ? { start } : null
+}
+
+function getAssetTotalLength (headers, rangeHeader) {
+  const contentRange = String(headers['content-range'] || '')
+  const totalMatch = contentRange.match(/\/(\d+)$/)
+  if (totalMatch) return Number(totalMatch[1])
+
+  const contentLength = Number(headers['content-length'])
+  return !rangeHeader && Number.isSafeInteger(contentLength) ? contentLength : null
+}
+
+function isOversizedMediaResponse (headers) {
+  const contentLength = Number(headers['content-length'])
+  return Number.isSafeInteger(contentLength) && contentLength > HYPER_MEDIA_WINDOW_BYTES
 }
 
 async function cancelResponseBody (body) {
@@ -186,31 +284,66 @@ function isStreamableBody (body) {
   )
 }
 
-async function writeResponseBody (res, body) {
-  if (typeof body[Symbol.asyncIterator] === 'function') {
-    for await (const chunk of body) {
-      await writeResponseChunk(res, chunk)
-    }
-    res.end()
-    return
+async function writeResponseBody (req, res, body) {
+  let disconnected = false
+  let cancelBody = () => cancelResponseBody(body)
+  let cancellation = null
+  const onDisconnect = () => {
+    if (disconnected) return
+    disconnected = true
+    cancellation = Promise.resolve(cancelBody()).catch(() => {})
   }
 
-  if (typeof body.getReader === 'function') {
-    const reader = body.getReader()
-    try {
+  req.once('aborted', onDisconnect)
+  res.once('close', onDisconnect)
+
+  try {
+    await streamResponseBody()
+  } catch (error) {
+    if (!disconnected && !res.destroyed) throw error
+  } finally {
+    req.off('aborted', onDisconnect)
+    res.off('close', onDisconnect)
+    if (cancellation) await cancellation
+  }
+
+  async function streamResponseBody () {
+    if (typeof body[Symbol.asyncIterator] === 'function') {
+      const iterator = body[Symbol.asyncIterator]()
+      cancelBody = async () => {
+        if (typeof iterator.return === 'function') await iterator.return()
+        else await cancelResponseBody(body)
+      }
+
       while (true) {
-        const { done, value } = await reader.read()
-        if (done) break
+        if (disconnected) break
+        const { done, value } = await iterator.next()
+        if (done || disconnected) break
         await writeResponseChunk(res, value)
       }
-    } finally {
-      if (reader.releaseLock) reader.releaseLock()
+      if (!disconnected && !res.destroyed) res.end()
+      return
     }
-    res.end()
-    return
-  }
 
-  await writeEventedBody(res, body)
+    if (typeof body.getReader === 'function') {
+      const reader = body.getReader()
+      cancelBody = () => reader.cancel()
+      try {
+        while (true) {
+          if (disconnected) break
+          const { done, value } = await reader.read()
+          if (done || disconnected) break
+          await writeResponseChunk(res, value)
+        }
+      } finally {
+        if (reader.releaseLock) reader.releaseLock()
+      }
+      if (!disconnected && !res.destroyed) res.end()
+      return
+    }
+
+    await writeEventedBody(res, body)
+  }
 }
 
 function writeResponseChunk (res, chunk) {
@@ -218,27 +351,68 @@ function writeResponseChunk (res, chunk) {
   if (bytes.byteLength < 1) return Promise.resolve()
 
   return new Promise((resolve, reject) => {
+    let settled = false
+    const finish = (error) => {
+      if (settled) return
+      settled = true
+      res.off('drain', onDrain)
+      res.off('error', onError)
+      res.off('close', onClose)
+      if (error) reject(error)
+      else resolve()
+    }
+    const onDrain = () => finish()
+    const onError = (error) => finish(error)
+    const onClose = () => finish(new Error('Media client disconnected'))
+
+    res.once('drain', onDrain)
+    res.once('error', onError)
+    res.once('close', onClose)
+
     try {
-      res.write(bytes, (error) => {
-        if (error) reject(error)
-        else resolve()
-      })
+      if (res.write(bytes)) finish()
     } catch (error) {
-      reject(error)
+      finish(error)
     }
   })
 }
 
 function writeEventedBody (res, body) {
   return new Promise((resolve, reject) => {
-    body.on('data', (chunk) => {
-      res.write(chunkToUint8Array(chunk))
-    })
-    body.on('end', () => {
-      res.end()
-      resolve()
-    })
-    body.on('error', reject)
+    let settled = false
+    const finish = (error) => {
+      if (settled) return
+      settled = true
+      body.off('data', onData)
+      body.off('end', onEnd)
+      body.off('error', onError)
+      res.off('drain', onDrain)
+      res.off('close', onClose)
+      if (error) reject(error)
+      else resolve()
+    }
+    const onData = (chunk) => {
+      try {
+        if (!res.write(chunkToUint8Array(chunk)) && typeof body.pause === 'function') body.pause()
+      } catch (error) {
+        finish(error)
+      }
+    }
+    const onDrain = () => {
+      if (typeof body.resume === 'function') body.resume()
+    }
+    const onEnd = () => {
+      if (!res.destroyed) res.end()
+      finish()
+    }
+    const onError = (error) => finish(error)
+    const onClose = () => finish()
+
+    body.on('data', onData)
+    body.on('end', onEnd)
+    body.on('error', onError)
+    res.on('drain', onDrain)
+    res.on('close', onClose)
   })
 }
 
@@ -255,7 +429,9 @@ function sendAssetText (res, statusCode, message) {
 
 function sendAssetError (res, error) {
   if (res.headersSent) {
-    res.destroy(error)
+    // Passing a late stream error through Bare's native HTTP callback can abort
+    // the JS worklet. Closing the incomplete response is enough for the client.
+    res.destroy()
     return
   }
 

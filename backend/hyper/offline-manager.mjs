@@ -11,6 +11,8 @@ import { withHyperRuntimeForAddress } from './runtime.mjs'
 import { parseHyperUrl } from './url.mjs'
 
 const MAX_OFFLINE_SIZE_ENTRIES = 5000
+const MAX_OFFLINE_PROGRESS_BLOCKS = 100000
+const OFFLINE_PROGRESS_SCAN_BATCH = 256
 
 export function createHyperOfflineManager ({
   runWithRuntime,
@@ -199,8 +201,9 @@ export function createHyperOfflineManager ({
 
     for (const item of items) {
       const id = getHyperOfflineItemId(item)
-      if (activeDownloads.has(id)) {
-        results.push(success(item, 'downloading'))
+      const active = activeDownloads.get(id)
+      if (active) {
+        results.push(success(item, 'downloading', active.progress || {}))
       } else if (pausedItems.has(id)) {
         results.push(success(item, 'paused'))
       } else if (await hasItem(item)) {
@@ -244,20 +247,26 @@ export function createHyperOfflineManager ({
 
     pausedItems.delete(id)
     failedItems.delete(id)
-    const active = { cancelled: false, download: null, promise: null }
+    const active = { cancelled: false, download: null, progress: null, promise: null }
     active.promise = runWithRuntime(`hyper://${item.driveKey}/`, async (runtime) => {
       const drive = await runtime.getDrive(`hyper://${item.driveKey}/`)
       if (await drive.has(item.path)) return success(item, 'available')
       if (active.cancelled) return success(item, 'paused')
 
-      active.download = drive.download(item.path)
-      await active.download.done()
-      if (active.cancelled) return success(item, 'paused')
-      if (!await drive.has(item.path)) {
-        throw new Error('The offline download did not complete.')
+      const progress = await createOfflineProgressTracker(drive, item.path, active)
+      try {
+        if (active.cancelled) return success(item, 'paused')
+        active.download = drive.download(item.path)
+        await active.download.done()
+        if (active.cancelled) return success(item, 'paused')
+        if (!await drive.has(item.path)) {
+          throw new Error('The offline download did not complete.')
+        }
+        progress?.complete()
+        return success(item, 'available')
+      } finally {
+        progress?.close()
       }
-
-      return success(item, 'available')
     }).catch((error) => {
       const message = normalizeError(error)
       if (!active.cancelled) failedItems.set(id, message)
@@ -329,6 +338,111 @@ export function createHyperOfflineManager ({
   }
 
   return { close, keep, list, pause, remove, resume, resumeAll }
+}
+
+async function createOfflineProgressTracker (drive, path, active) {
+  if (typeof drive.getBlobs !== 'function') return null
+
+  try {
+    const blobs = await drive.getBlobs()
+    const blocks = new Map()
+    let entries = 0
+
+    for await (const entry of drive.list(path)) {
+      entries += 1
+      if (entries > MAX_OFFLINE_SIZE_ENTRIES) return null
+
+      const blob = entry?.value?.blob
+      if (!blob) continue
+      const remainingCapacity = MAX_OFFLINE_PROGRESS_BLOCKS - blocks.size
+
+      if (blob.blockMap) {
+        const blockMap = await blobs.getBlockMap(blob)
+        if (!blockMap || blockMap.blocks.length > remainingCapacity) return null
+        for (const block of blockMap.blocks) {
+          addProgressBlock(blocks, block.index, block.byteLength)
+        }
+        continue
+      }
+
+      const blockOffset = Number(blob.blockOffset)
+      const blockLength = Number(blob.blockLength)
+      const byteLength = Number(blob.byteLength)
+      if (
+        !Number.isSafeInteger(blockOffset) || blockOffset < 0 ||
+        !Number.isSafeInteger(blockLength) || blockLength < 0 ||
+        !Number.isSafeInteger(byteLength) || byteLength < 0 ||
+        blockLength > remainingCapacity
+      ) return null
+
+      let remainingBytes = byteLength
+      for (let offset = 0; offset < blockLength; offset += 1) {
+        const blockBytes = Math.min(blobs.blockSize || 65536, remainingBytes)
+        addProgressBlock(blocks, blockOffset + offset, blockBytes)
+        remainingBytes -= blockBytes
+      }
+    }
+
+    if (blocks.size === 0) return null
+
+    const totalBytes = [...blocks.values()].reduce(safeByteSum, 0)
+    if (totalBytes < 1) return null
+
+    const completedBlocks = new Set()
+    let downloadedBytes = 0
+
+    const markCompleted = (index) => {
+      if (!blocks.has(index) || completedBlocks.has(index)) return
+      completedBlocks.add(index)
+      downloadedBytes = safeByteSum(downloadedBytes, blocks.get(index))
+      active.progress = {
+        downloadedBytes,
+        totalBytes,
+        percentage: Math.min(99, Math.floor((downloadedBytes / totalBytes) * 100))
+      }
+    }
+    const blockIndexes = [...blocks.keys()]
+    for (let offset = 0; offset < blockIndexes.length; offset += OFFLINE_PROGRESS_SCAN_BATCH) {
+      if (active.cancelled) return null
+      const batch = blockIndexes.slice(offset, offset + OFFLINE_PROGRESS_SCAN_BATCH)
+      const available = await Promise.all(batch.map((index) => blobs.core.has(index)))
+      available.forEach((hasBlock, index) => {
+        if (hasBlock) markCompleted(batch[index])
+      })
+    }
+
+    const onDownload = (index) => markCompleted(index)
+    blobs.core.on('download', onDownload)
+    active.progress = {
+      downloadedBytes,
+      totalBytes,
+      percentage: Math.min(99, Math.floor((downloadedBytes / totalBytes) * 100))
+    }
+
+    return {
+      close: () => blobs.core.off('download', onDownload),
+      complete: () => {
+        active.progress = { downloadedBytes: totalBytes, totalBytes, percentage: 100 }
+      }
+    }
+  } catch {
+    active.progress = null
+    return null
+  }
+}
+
+function addProgressBlock (blocks, indexValue, byteLengthValue) {
+  const index = Number(indexValue)
+  const byteLength = Number(byteLengthValue)
+  if (!Number.isSafeInteger(index) || index < 0) return
+  if (!Number.isSafeInteger(byteLength) || byteLength < 1) return
+  if (!blocks.has(index)) blocks.set(index, byteLength)
+}
+
+function safeByteSum (total, value) {
+  return total > Number.MAX_SAFE_INTEGER - value
+    ? Number.MAX_SAFE_INTEGER
+    : total + value
 }
 
 const manager = createHyperOfflineManager({

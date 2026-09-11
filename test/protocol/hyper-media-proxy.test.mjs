@@ -91,6 +91,39 @@ describe('hyper media proxy server', () => {
     })
   })
 
+  test('streams chunks without registering a native callback for every write', async () => {
+    const writeArgumentCounts = []
+    const httpWithoutWriteCallbacks = {
+      createServer (handler) {
+        return http.createServer((req, res) => {
+          const write = res.write.bind(res)
+          res.write = (...args) => {
+            writeArgumentCounts.push(args.length)
+            return write(...args)
+          }
+          handler(req, res)
+        })
+      }
+    }
+    const server = createHyperAssetServer({
+      httpImpl: httpWithoutWriteCallbacks,
+      authToken: ASSET_AUTH_TOKEN,
+      fetch: async () => createStreamResponse({
+        body: ['first', 'second'],
+        headers: {
+          'content-type': 'video/mp4',
+          'content-length': '11'
+        }
+      })
+    })
+
+    await withServer(server, async (localUrl) => {
+      const response = await fetch(`${localUrl}/asset?token=${ASSET_AUTH_TOKEN}&url=${encodeURIComponent('hyper://example.com/video.mp4')}`)
+      assert.equal(await response.text(), 'firstsecond')
+      assert.deepEqual(writeArgumentCounts, [1, 1])
+    })
+  })
+
   test('serves HEAD responses with headers and no body', async () => {
     let upstreamCancelled = false
     const body = {
@@ -154,6 +187,149 @@ describe('hyper media proxy server', () => {
       assert.equal(response.headers.get('content-range'), 'bytes 0-3/12')
       assert.equal(await response.text(), 'part')
       assert.equal(calls[0].init.headers.get('range'), 'bytes=0-3')
+    })
+  })
+
+  test('serves large media in bounded range windows', async () => {
+    const calls = []
+    let initialBodyCancelled = false
+    const initialBody = {
+      [Symbol.asyncIterator] () { return this },
+      next: async () => ({ done: false, value: new Uint8Array(64 * 1024) }),
+      return: async () => {
+        initialBodyCancelled = true
+        return { done: true }
+      }
+    }
+    const server = createHyperAssetServer({
+      httpImpl: http,
+      authToken: ASSET_AUTH_TOKEN,
+      fetch: async (url, init) => {
+        calls.push({ url, init })
+        if (calls.length === 1) {
+          return createStreamResponse({
+            body: initialBody,
+            headers: {
+              'content-type': 'video/mp4',
+              'content-length': String(8 * 1024 * 1024)
+            }
+          })
+        }
+        return createStreamResponse({
+          status: 206,
+          body: ['window'],
+          headers: {
+            'content-type': 'video/mp4',
+            'content-range': `bytes 0-${4 * 1024 * 1024 - 1}/${8 * 1024 * 1024}`,
+            'content-length': '6'
+          }
+        })
+      }
+    })
+
+    await withServer(server, async (localUrl) => {
+      const assetUrl = 'hyper://example.com/large-video.mp4'
+      const response = await fetch(`${localUrl}/asset?token=${ASSET_AUTH_TOKEN}&url=${encodeURIComponent(assetUrl)}`)
+
+      assert.equal(response.status, 206)
+      assert.equal(await response.text(), 'window')
+      assert.equal(initialBodyCancelled, true)
+      assert.equal(calls.length, 2)
+      assert.equal(calls[1].init.headers.get('range'), `bytes=0-${4 * 1024 * 1024 - 1}`)
+    })
+  })
+
+  test('uses a direct Hyperdrive range when the generic fetch ignores ranges', async () => {
+    const byteLength = 12 * 1024 * 1024
+    const directRanges = []
+    const server = createHyperAssetServer({
+      httpImpl: http,
+      authToken: ASSET_AUTH_TOKEN,
+      fetch: async () => createStreamResponse({
+        body: sizedBody(byteLength),
+        headers: {
+          'content-type': 'video/mp4',
+          'content-length': String(byteLength)
+        }
+      }),
+      fetchRange: async (url, range) => {
+        directRanges.push({ url, range })
+        return createStreamResponse({
+          body: ['window'],
+          headers: {
+            'content-range': `bytes 0-${4 * 1024 * 1024 - 1}/${byteLength}`,
+            'content-length': '6'
+          }
+        })
+      }
+    })
+
+    await withServer(server, async (localUrl) => {
+      const assetUrl = 'hyper://example.com/cached-video.mp4'
+      const response = await fetch(`${localUrl}/asset?token=${ASSET_AUTH_TOKEN}&url=${encodeURIComponent(assetUrl)}`, {
+        headers: { Range: 'bytes=0-' }
+      })
+
+      assert.equal(response.status, 206)
+      assert.equal(response.headers.get('content-type'), 'video/mp4')
+      assert.equal(await response.text(), 'window')
+      assert.deepEqual(directRanges, [{
+        url: assetUrl,
+        range: `bytes=0-${4 * 1024 * 1024 - 1}`
+      }])
+    })
+  })
+
+  test('bounds open-ended follow-up ranges from the media player', async () => {
+    const calls = []
+    let openEndedBodyCancelled = false
+    const openEndedBody = {
+      [Symbol.asyncIterator] () { return this },
+      next: async () => ({ done: false, value: new Uint8Array(64 * 1024) }),
+      return: async () => {
+        openEndedBodyCancelled = true
+        return { done: true }
+      }
+    }
+    const server = createHyperAssetServer({
+      httpImpl: http,
+      authToken: ASSET_AUTH_TOKEN,
+      fetch: async (url, init) => {
+        calls.push({ url, init })
+        if (calls.length === 1) {
+          return createStreamResponse({
+            status: 206,
+            body: openEndedBody,
+            headers: {
+              'content-type': 'video/mp4',
+              'content-range': `bytes ${4 * 1024 * 1024}-${32 * 1024 * 1024 - 1}/${32 * 1024 * 1024}`,
+              'content-length': String(28 * 1024 * 1024)
+            }
+          })
+        }
+        return createStreamResponse({
+          status: 206,
+          body: ['window'],
+          headers: {
+            'content-type': 'video/mp4',
+            'content-range': `bytes ${4 * 1024 * 1024}-${8 * 1024 * 1024 - 1}/${32 * 1024 * 1024}`,
+            'content-length': '6'
+          }
+        })
+      }
+    })
+
+    await withServer(server, async (localUrl) => {
+      const assetUrl = 'hyper://example.com/large-video.mp4'
+      const response = await fetch(`${localUrl}/asset?token=${ASSET_AUTH_TOKEN}&url=${encodeURIComponent(assetUrl)}`, {
+        headers: { Range: `bytes=${4 * 1024 * 1024}-` }
+      })
+
+      assert.equal(response.status, 206)
+      assert.equal(await response.text(), 'window')
+      assert.equal(openEndedBodyCancelled, true)
+      assert.equal(calls.length, 2)
+      assert.equal(calls[1].init.headers.get('range'), `bytes=${4 * 1024 * 1024}-${8 * 1024 * 1024 - 1}`)
     })
   })
 
@@ -227,10 +403,48 @@ describe('hyper media proxy server', () => {
     })
 
     await withServer(server, async (localUrl) => {
-      const result = await requestWithNodeHttp(`${localUrl}/asset?token=${ASSET_AUTH_TOKEN}&url=${encodeURIComponent('hyper://example.com/broken.mp4')}`)
-      assert.equal(result.statusCode, 200)
-      assert.equal(result.body, 'partial')
-      assert.equal(result.aborted, true)
+      try {
+        const result = await requestWithNodeHttp(`${localUrl}/asset?token=${ASSET_AUTH_TOKEN}&url=${encodeURIComponent('hyper://example.com/broken.mp4')}`)
+        assert.equal(result.statusCode, 200)
+        assert.equal(result.aborted, true)
+      } catch (error) {
+        assert.equal(error.code, 'ECONNRESET')
+      }
+    })
+  })
+
+  test('cancels the Hyper stream when a media client disconnects', async () => {
+    let upstreamCancelled = false
+    let releasePendingRead = null
+    let reads = 0
+    const body = {
+      [Symbol.asyncIterator] () { return this },
+      next () {
+        reads++
+        if (reads === 1) {
+          return Promise.resolve({ done: false, value: new Uint8Array(64 * 1024).fill(1) })
+        }
+        return new Promise((resolve) => { releasePendingRead = resolve })
+      },
+      return () {
+        upstreamCancelled = true
+        releasePendingRead?.({ done: true })
+        return Promise.resolve({ done: true })
+      }
+    }
+    const server = createHyperAssetServer({
+      httpImpl: http,
+      authToken: ASSET_AUTH_TOKEN,
+      fetch: async () => createStreamResponse({
+        body,
+        headers: { 'content-type': 'video/mp4' }
+      })
+    })
+
+    await withServer(server, async (localUrl) => {
+      await abortAfterFirstChunk(`${localUrl}/asset?token=${ASSET_AUTH_TOKEN}&url=${encodeURIComponent('hyper://example.com/large-video.mp4')}`)
+      await waitFor(() => upstreamCancelled)
+      assert.equal(upstreamCancelled, true)
     })
   })
 
@@ -304,6 +518,36 @@ describe('hyper media proxy server', () => {
       assert.equal(await response.text(), 'report')
     })
   })
+
+  test('does not range-window explicit large media downloads', async () => {
+    const calls = []
+    const byteLength = 5 * 1024 * 1024
+    const server = createHyperAssetServer({
+      httpImpl: http,
+      authToken: ASSET_AUTH_TOKEN,
+      fetch: async (url, init) => {
+        calls.push({ url, init })
+        return createStreamResponse({
+          body: sizedBody(byteLength),
+          headers: {
+            'content-type': 'video/mp4',
+            'content-length': String(byteLength)
+          }
+        })
+      }
+    })
+
+    await withServer(server, async (localUrl) => {
+      const assetUrl = 'hyper://example.com/large-video.mp4'
+      const response = await fetch(
+        `${localUrl}/asset?token=${ASSET_AUTH_TOKEN}&url=${encodeURIComponent(assetUrl)}&download=1&name=large-video.mp4`
+      )
+
+      assert.equal((await response.arrayBuffer()).byteLength, byteLength)
+      assert.equal(calls.length, 1)
+      assert.equal(calls[0].init, undefined)
+    })
+  })
 })
 
 function createStreamResponse ({
@@ -324,6 +568,13 @@ function createStreamResponse ({
 async function * chunkBody (chunks) {
   for (const chunk of chunks) {
     yield new TextEncoder().encode(chunk)
+  }
+}
+
+async function * sizedBody (byteLength) {
+  const chunk = new Uint8Array(64 * 1024)
+  for (let offset = 0; offset < byteLength; offset += chunk.byteLength) {
+    yield chunk.subarray(0, Math.min(chunk.byteLength, byteLength - offset))
   }
 }
 
@@ -387,4 +638,27 @@ function requestWithNodeHttp (url) {
 
     req.on('error', reject)
   })
+}
+
+function abortAfterFirstChunk (url) {
+  return new Promise((resolve, reject) => {
+    const req = http.get(url, (res) => {
+      res.once('data', () => {
+        req.destroy()
+        resolve()
+      })
+    })
+    req.on('error', (error) => {
+      if (error.code === 'ECONNRESET') resolve()
+      else reject(error)
+    })
+  })
+}
+
+async function waitFor (condition, timeout = 1000) {
+  const startedAt = Date.now()
+  while (!condition()) {
+    if (Date.now() - startedAt >= timeout) throw new Error('Timed out waiting for condition')
+    await new Promise((resolve) => setTimeout(resolve, 10))
+  }
 }

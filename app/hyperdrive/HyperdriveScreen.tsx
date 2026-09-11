@@ -2,7 +2,9 @@ import { useEffect, useState, useRef } from 'react'
 import {
   ActivityIndicator,
   Alert,
+  Animated,
   Clipboard,
+  Easing,
   Image,
   Modal,
   Pressable,
@@ -66,6 +68,9 @@ type HyperOfflineItem = {
   driveKey: string
   path: string
   status: 'available' | 'downloading' | 'error' | 'paused' | 'waiting-for-wifi'
+  downloadedBytes?: number
+  totalBytes?: number
+  percentage?: number
 }
 
 type Props = {
@@ -130,8 +135,21 @@ export function HyperdriveScreen ({ offlineNetworkAllowed, isDark, isLandscape, 
       !(offlineNetworkAllowed && offlineItem?.status === 'waiting-for-wifi')
     )) return
     const request = offlineRequestRef.current
-    const timer = setTimeout(() => void loadOfflineState(offlineTarget, request, false), 2000)
-    return () => clearTimeout(timer)
+    let cancelled = false
+    let timer: ReturnType<typeof setTimeout> | null = null
+
+    const poll = async () => {
+      await loadOfflineState(offlineTarget, request, false)
+      if (!cancelled && request === offlineRequestRef.current) {
+        timer = setTimeout(() => void poll(), 2000)
+      }
+    }
+
+    timer = setTimeout(() => void poll(), 2000)
+    return () => {
+      cancelled = true
+      if (timer) clearTimeout(timer)
+    }
   }, [offlineItem?.status, offlineNetworkAllowed, offlineTarget?.driveKey, offlineTarget?.path])
 
   async function loadOfflineState (target: { driveKey: string, path: string }, request: number, showLoading: boolean) {
@@ -553,6 +571,18 @@ export function HyperdriveScreen ({ offlineNetworkAllowed, isDark, isLandscape, 
           </View>
         )}
       </View>
+      {offlineItem?.status === 'downloading' && (
+        <View style={styles.offlineProgressRow}>
+          <OfflineProgressBar
+            color={palette.accent}
+            percentage={offlineItem.percentage}
+            trackColor={palette.border}
+          />
+          <Text style={[styles.offlineProgressText, { color: palette.muted }]}>
+            {Number.isFinite(offlineItem.percentage) ? `${offlineItem.percentage}%` : 'Downloading'}
+          </Text>
+        </View>
+      )}
       {listingTruncated && <Text style={[styles.limitNote, { color: palette.muted }]}>Showing a partial directory listing.</Text>}
 
       {isLandscape
@@ -639,10 +669,64 @@ function OfflineActionIcon ({ item, color }: { item: HyperOfflineItem | null, co
   return <DownloadIcon width={16} height={16} color={color} />
 }
 
+function OfflineProgressBar ({ color, percentage, trackColor }: { color: string, percentage?: number, trackColor: string }) {
+  const progress = useRef(new Animated.Value(0)).current
+  const [trackWidth, setTrackWidth] = useState(0)
+  const indicatorWidth = Math.max(48, trackWidth * 0.28)
+  const determinatePercentage = Number.isFinite(percentage)
+    ? Math.max(0, Math.min(100, Number(percentage)))
+    : null
+
+  useEffect(() => {
+    if (determinatePercentage !== null) return
+    const animation = Animated.loop(Animated.timing(progress, {
+      duration: 1100,
+      easing: Easing.inOut(Easing.ease),
+      toValue: 1,
+      useNativeDriver: true
+    }))
+    animation.start()
+    return () => animation.stop()
+  }, [determinatePercentage, progress])
+
+  return (
+    <View
+      accessibilityLabel='Downloading for offline use'
+      accessibilityRole='progressbar'
+      accessibilityValue={determinatePercentage === null ? undefined : { min: 0, max: 100, now: determinatePercentage }}
+      onLayout={({ nativeEvent }) => setTrackWidth(nativeEvent.layout.width)}
+      style={[styles.offlineProgressTrack, { backgroundColor: trackColor }]}
+    >
+      {determinatePercentage === null
+        ? (
+          <Animated.View
+            style={[
+              styles.offlineProgressIndicator,
+              {
+                backgroundColor: color,
+                transform: [{ translateX: progress.interpolate({ inputRange: [0, 1], outputRange: [-indicatorWidth, trackWidth] }) }],
+                width: indicatorWidth
+              }
+            ]}
+          />
+          )
+        : (
+          <View
+            style={[
+              styles.offlineProgressIndicator,
+              { backgroundColor: color, width: `${determinatePercentage}%` }
+            ]}
+          />
+          )}
+    </View>
+  )
+}
+
 function getOfflineActionLabel (item: HyperOfflineItem | null) {
   if (!item) return 'Keep offline'
   if (item.status === 'available') return 'Remove offline'
   if (item.status === 'downloading') return 'Pause'
+  if (item.status === 'waiting-for-wifi') return 'Waiting for Wi-Fi'
   return 'Resume'
 }
 
@@ -732,6 +816,10 @@ const styles = StyleSheet.create({
   heading: { flex: 1, fontSize: 20, fontWeight: '700' },
   offlineButton: { alignItems: 'center', borderRadius: 8, borderWidth: 1, flexDirection: 'row', gap: 5, minHeight: 38, paddingHorizontal: 9 },
   offlineButtonText: { fontSize: 11, fontWeight: '700' },
+  offlineProgressRow: { alignItems: 'center', flexDirection: 'row', gap: 8 },
+  offlineProgressText: { fontSize: 11, fontVariant: ['tabular-nums'], minWidth: 34, textAlign: 'right' },
+  offlineProgressTrack: { borderRadius: 2, flex: 1, height: 3, overflow: 'hidden' },
+  offlineProgressIndicator: { borderRadius: 2, height: 3 },
   backButton: { alignItems: 'center', height: 40, justifyContent: 'center', marginRight: 6, width: 34 },
   dropdownWrap: { position: 'relative', zIndex: 30 },
   filterButton: { alignItems: 'center', borderRadius: 8, borderWidth: 1, flexDirection: 'row', gap: 9, minWidth: 112, paddingHorizontal: 12, paddingVertical: 9 },

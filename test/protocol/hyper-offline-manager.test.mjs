@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import { EventEmitter } from 'node:events'
 import { test } from 'node:test'
 import { createHyperOfflineManager } from '../../backend/hyper/offline-manager.mjs'
 
@@ -98,6 +99,41 @@ test('starts a resumable download without holding the caller open', async () => 
   assert.equal(drive.downloadCalls, 1)
   pending.resolve()
   await waitFor(() => drive.hasCalls === 2)
+})
+
+test('reports bounded byte progress for an active offline download', async () => {
+  const pending = deferred()
+  const availableBlocks = new Set([4])
+  const core = new EventEmitter()
+  core.has = async (index) => availableBlocks.has(index)
+  const drive = createDrive({
+    has: sequence(false, true),
+    done: () => pending.promise,
+    entries: [{
+      key: '/docs/video.mp4',
+      value: { blob: { blockOffset: 4, blockLength: 2, byteLength: 15 } }
+    }],
+    blobs: { blockSize: 10, core }
+  })
+  const harness = createHarness(drive)
+
+  await harness.manager.keep({ url: FOLDER_URL, wait: false })
+  await waitFor(() => drive.downloadCalls === 1)
+
+  const initial = await harness.manager.list({ driveKey: DRIVE_KEY, path: '/docs/' })
+  assert.equal(initial.items[0].downloadedBytes, 10)
+  assert.equal(initial.items[0].totalBytes, 15)
+  assert.equal(initial.items[0].percentage, 66)
+
+  availableBlocks.add(5)
+  core.emit('download', 5, 5)
+  const updated = await harness.manager.list({ driveKey: DRIVE_KEY, path: '/docs/' })
+  assert.equal(updated.items[0].downloadedBytes, 15)
+  assert.equal(updated.items[0].percentage, 99)
+
+  pending.resolve()
+  await waitFor(() => core.listenerCount('download') === 0)
+  assert.equal(core.listenerCount('download'), 0)
 })
 
 test('waits for Wi-Fi instead of resuming incomplete folders', async () => {
@@ -377,12 +413,13 @@ function createDrive ({
   has = () => true,
   done = () => Promise.resolve(),
   entries = [],
+  blobs = null,
   listError = null,
   onDownload = () => {},
   onDestroy = () => {},
   onClear = () => {}
 } = {}) {
-  return {
+  const drive = {
     id: DRIVE_KEY,
     downloadCalls: 0,
     destroyCalls: 0,
@@ -416,6 +453,8 @@ function createDrive ({
       return { blocks: 1 }
     }
   }
+  if (blobs) drive.getBlobs = async () => blobs
+  return drive
 }
 
 function sequence (...values) {

@@ -28,7 +28,9 @@ export async function withHyperRetry ({
           text = await response.text()
         } catch (_) {}
 
-        const isRetryable = isPeerDiscoveryError(text) || response.status === 502
+        const responseError = text || response.statusText || `Request failed with status ${response.status}`
+        const isRetryable = !isHyperRequestTimeout(responseError) &&
+          (isPeerDiscoveryError(text) || response.status === 502)
         if (isRetryable && attempt < retries) {
           attempt++
           await runBeforeRetry(beforeRetry)
@@ -43,7 +45,7 @@ export async function withHyperRetry ({
           statusText: response.statusText,
           url: response.url || url,
           headers,
-          error: text || response.statusText || `Request failed with status ${response.status}`
+          error: normalizeHyperFetchError(responseError)
         }
       }
 
@@ -66,7 +68,7 @@ export async function withHyperRetry ({
         statusText: 'Bad Gateway',
         url,
         headers: { 'content-type': 'text/plain; charset=utf-8' },
-        error: errorMsg
+        error: normalizeHyperFetchError(error)
       }
     }
   }
@@ -82,6 +84,20 @@ async function runBeforeRetry (beforeRetry) {
 export function isPeerDiscoveryError (message) {
   return /\bpeers?\s+not\s+found\b/i.test(message) ||
     /could not find data in drive[^\n]*peers online/i.test(message)
+}
+
+export function normalizeHyperFetchError (error) {
+  const message = error instanceof Error ? error.message : String(error)
+  if (isHyperRequestTimeout(error)) {
+    return 'Hyper content is unavailable. Connect to the network or wait for a peer, then try again.'
+  }
+  return message
+}
+
+function isHyperRequestTimeout (error) {
+  const message = error instanceof Error ? error.message : String(error)
+  const code = error && typeof error === 'object' ? error.code : null
+  return code === 'REQUEST_TIMEOUT' || /\brequest(?:_|\s+)timeout\b|request timed out/i.test(message)
 }
 
 function delay (milliseconds) {
