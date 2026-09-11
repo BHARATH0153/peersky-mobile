@@ -1139,6 +1139,14 @@ export function PeerChatScreen ({
     setShowIntro(false)
   }
 
+  function completeProfileOnboarding () {
+    if (!profileName.trim() || isBusy) return
+    void runAction(async () => {
+      await saveProfile()
+      onStatus('PeerChat profile created')
+    })
+  }
+
   if (!isReady || !isIntroReady) {
     return (
       <View style={[styles.centered, { backgroundColor: colors.background }]}>
@@ -1173,6 +1181,64 @@ export function PeerChatScreen ({
           <Text style={styles.introContinueText}>Continue</Text>
         </Pressable>
       </View>
+    )
+  }
+
+  if (isInitialized && !profile?.username) {
+    return (
+      <KeyboardAvoidingView
+        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+        style={[styles.onboardingScreen, { backgroundColor: colors.background }]}
+      >
+        <ScrollView
+          contentContainerStyle={styles.onboardingContent}
+          keyboardShouldPersistTaps='handled'
+        >
+          <Image source={PEERCHAT_ICON} style={styles.onboardingLogo} />
+          <Text style={[styles.onboardingTitle, { color: colors.text }]}>Set up your profile</Text>
+          <Text style={[styles.onboardingHelper, { color: colors.muted }]}>Choose the name other peers will see in rooms and direct messages.</Text>
+          <View style={styles.onboardingFields}>
+            <Text style={[styles.onboardingLabel, { color: colors.text }]}>Name</Text>
+            <TextInput
+              autoCapitalize='words'
+              autoCorrect={false}
+              autoFocus
+              maxLength={50}
+              onChangeText={setProfileName}
+              placeholder='Your display name'
+              placeholderTextColor={colors.muted}
+              returnKeyType='next'
+              style={[styles.input, { backgroundColor: colors.input, color: colors.text }]}
+              value={profileName}
+            />
+            <Text style={[styles.onboardingLabel, { color: colors.text }]}>Bio</Text>
+            <TextInput
+              maxLength={300}
+              multiline
+              onChangeText={setProfileBio}
+              placeholder='A short bio (optional)'
+              placeholderTextColor={colors.muted}
+              style={[styles.input, styles.onboardingBio, { backgroundColor: colors.input, color: colors.text }]}
+              value={profileBio}
+            />
+          </View>
+          {!!error && <Text style={[styles.error, { color: colors.danger }]}>{error}</Text>}
+        </ScrollView>
+        <Pressable
+          accessibilityRole='button'
+          disabled={!profileName.trim() || isBusy}
+          onPress={completeProfileOnboarding}
+          style={[
+            styles.introContinue,
+            { backgroundColor: colors.accent },
+            !profileName.trim() || isBusy ? styles.disabled : null
+          ]}
+        >
+          {isBusy
+            ? <ActivityIndicator color='#ffffff' />
+            : <Text style={styles.introContinueText}>Continue</Text>}
+        </Pressable>
+      </KeyboardAvoidingView>
     )
   }
 
@@ -2832,6 +2898,14 @@ const styles = StyleSheet.create({
   introPointText: { flex: 1, fontSize: 14, lineHeight: 20 },
   introContinue: { alignItems: 'center', borderRadius: 12, justifyContent: 'center', marginHorizontal: 22, minHeight: 50 },
   introContinueText: { color: '#ffffff', fontSize: 15, fontWeight: '900' },
+  onboardingScreen: { flex: 1, paddingBottom: 18 },
+  onboardingContent: { flexGrow: 1, justifyContent: 'center', paddingHorizontal: 24, paddingVertical: 28 },
+  onboardingLogo: { alignSelf: 'center', borderRadius: 18, height: 72, marginBottom: 16, width: 72 },
+  onboardingTitle: { fontSize: 25, fontWeight: '900', textAlign: 'center' },
+  onboardingHelper: { alignSelf: 'center', fontSize: 13, lineHeight: 19, marginTop: 8, maxWidth: 340, textAlign: 'center' },
+  onboardingFields: { gap: 8, marginTop: 26 },
+  onboardingLabel: { fontSize: 12, fontWeight: '800', marginTop: 4 },
+  onboardingBio: { maxHeight: 110, minHeight: 76, textAlignVertical: 'top' },
   landingContent: { paddingBottom: 28 },
   landingHeader: { gap: 12, paddingHorizontal: 16, paddingTop: 14 },
   titleRow: { alignItems: 'center', flexDirection: 'row', gap: 10 },
