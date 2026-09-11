@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { File, Paths } from 'expo-file-system'
 import * as DocumentPicker from 'expo-document-picker'
 import { useAudioPlayer } from 'expo-audio'
+import { ImageManipulator, SaveFormat } from 'expo-image-manipulator'
 import { useVideoPlayer, VideoView } from 'expo-video'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import {
@@ -215,6 +216,7 @@ type PeerChatScreenProps = {
 
 const POLL_INTERVAL_MS = 1500
 const ROOM_LIST_POLL_INTERVAL_MS = 3000
+const MAX_PEERCHAT_AVATAR_SOURCE_BYTES = 25 * 1024 * 1024
 const QUICK_REACTIONS = ['👍', '❤️', '😂', '😮', '😢', '🔥']
 const PEERCHAT_EMOJI_ENTRIES = createPeerChatEmojiEntries(
   require('../../assets/peerchat/emojilib-emoji-en-US.json')
@@ -299,7 +301,6 @@ export function PeerChatScreen ({
   const [showScrollToLatest, setShowScrollToLatest] = useState(false)
   const [composer, setComposer] = useState('')
   const [replyTarget, setReplyTarget] = useState<PeerChatReply | null>(null)
-  const [reactionTargetId, setReactionTargetId] = useState<string | null>(null)
   const [messageActionTarget, setMessageActionTarget] = useState<PeerChatMessage | null>(null)
   const [roomActionTarget, setRoomActionTarget] = useState<PeerChatRoom | null>(null)
   const [isConfirmingRoomLeave, setIsConfirmingRoomLeave] = useState(false)
@@ -701,7 +702,7 @@ export function PeerChatScreen ({
     if (isBusy) return
     const select = () => void runAction(async () => {
       const selection = await DocumentPicker.getDocumentAsync({
-        type: ['image/png', 'image/jpeg', 'image/webp', 'image/gif'],
+        type: 'image/*',
         copyToCacheDirectory: true,
         multiple: false
       })
@@ -710,15 +711,43 @@ export function PeerChatScreen ({
       const asset = selection.assets[0]
       const file = new File(asset.uri)
       const size = asset.size ?? file.size
-      if (!Number.isSafeInteger(size) || Number(size) < 1 || Number(size) > MAX_PEERCHAT_AVATAR_FILE_BYTES) {
-        throw new Error('Choose an image smaller than 143 KB.')
+      if (!Number.isSafeInteger(size) || Number(size) < 1) {
+        throw new Error('Unable to read the selected image.')
       }
-      const avatar = createPeerChatAvatarDataUrl({
-        name: asset.name,
-        mimeType: asset.mimeType,
-        size,
-        base64: await file.base64()
-      })
+      if (Number(size) > MAX_PEERCHAT_AVATAR_SOURCE_BYTES) {
+        throw new Error('Choose an image smaller than 25 MB.')
+      }
+
+      const manipulation = ImageManipulator.manipulate(asset.uri)
+      let resizedImage = null
+      let avatar = ''
+      try {
+        const dimensions = await Image.getSize(asset.uri)
+        if (Math.max(dimensions.width, dimensions.height) > 512) {
+          manipulation.resize(dimensions.width >= dimensions.height ? { width: 512 } : { height: 512 })
+        }
+        resizedImage = await manipulation.renderAsync()
+        for (const compress of [0.8, 0.65, 0.5, 0.35]) {
+          const result = await resizedImage.saveAsync({
+            base64: true,
+            compress,
+            format: SaveFormat.JPEG
+          })
+          const resizedFile = new File(result.uri)
+          if (resizedFile.size > MAX_PEERCHAT_AVATAR_FILE_BYTES) continue
+          avatar = createPeerChatAvatarDataUrl({
+            name: 'peerchat-avatar.jpg',
+            mimeType: 'image/jpeg',
+            size: resizedFile.size,
+            base64: result.base64
+          })
+          break
+        }
+      } finally {
+        resizedImage?.release()
+        manipulation.release()
+      }
+      if (!avatar) throw new Error('Unable to reduce the selected image below 143 KB.')
       if (mountedRef.current) onChange(avatar)
     })
 
@@ -741,7 +770,6 @@ export function PeerChatScreen ({
     knownMessageIdsRef.current = new Set()
     setMessages([])
     setReplyTarget(null)
-    setReactionTargetId(null)
     setIsSearching(false)
     setSearchQuery('')
     setShowRoomInfo(false)
@@ -996,7 +1024,6 @@ export function PeerChatScreen ({
         setActiveRoom(null)
         setMessages([])
         setReplyTarget(null)
-        setReactionTargetId(null)
         setIsSearching(false)
         setSearchQuery('')
       }
@@ -1024,15 +1051,8 @@ export function PeerChatScreen ({
     setMessageActionTarget(message)
   }
 
-  function reactToMessage (message: PeerChatMessage) {
-    setMessageActionTarget(null)
-    setReplyTarget(null)
-    setReactionTargetId(message.id)
-  }
-
   function replyToMessage (message: PeerChatMessage) {
     setMessageActionTarget(null)
-    setReactionTargetId(null)
     setReplyTarget({
       id: message.id,
       sender: message.sender,
@@ -1065,10 +1085,15 @@ export function PeerChatScreen ({
       })
       if (!response.ok) throw new Error(response.error || 'Unable to update PeerChat reaction.')
       if (!mountedRef.current) return
-      setReactionTargetId(null)
       versionRef.current = -1
       await refreshRoom(true)
     })
+  }
+
+  function sendMessageActionReaction (messageId: string, emoji: string) {
+    setMessageActionTarget(null)
+    setReplyTarget(null)
+    sendReaction(messageId, emoji)
   }
 
   function continueFromIntro () {
@@ -1127,7 +1152,6 @@ export function PeerChatScreen ({
             accessibilityRole='button'
             onPress={() => {
               setReplyTarget(null)
-              setReactionTargetId(null)
               setIsSearching(false)
               setSearchQuery('')
               setActiveRoom(null)
@@ -1589,31 +1613,6 @@ export function PeerChatScreen ({
 
         {error && <Text style={[styles.inlineError, { color: colors.danger }]}>{error}</Text>}
 
-        {reactionTargetId && (
-          <View style={[styles.reactionPicker, { borderTopColor: colors.border, backgroundColor: colors.input }]}>
-            {QUICK_REACTIONS.map((emoji) => (
-              <Pressable
-                accessibilityLabel={`React with ${emoji}`}
-                accessibilityRole='button'
-                disabled={isBusy}
-                key={emoji}
-                onPress={() => sendReaction(reactionTargetId, emoji)}
-                style={[styles.reactionPickerButton, isBusy ? styles.disabled : null]}
-              >
-                <Text style={styles.reactionPickerEmoji}>{emoji}</Text>
-              </Pressable>
-            ))}
-            <Pressable
-              accessibilityLabel='Close reaction picker'
-              accessibilityRole='button'
-              hitSlop={8}
-              onPress={() => setReactionTargetId(null)}
-              style={styles.cancelReply}
-            >
-              <Text style={[styles.cancelReplyText, { color: colors.muted }]}>x</Text>
-            </Pressable>
-          </View>
-        )}
         {replyTarget && (
           <View style={[styles.replyComposer, { borderTopColor: colors.border, backgroundColor: colors.input }]}>
             <View style={styles.replyComposerCopy}>
@@ -1780,6 +1779,22 @@ export function PeerChatScreen ({
                 <Text numberOfLines={2} style={[styles.actionSheetPreview, { color: colors.muted }]}>
                   {Array.from(messageActionTarget.message).slice(0, 200).join('')}
                 </Text>
+                {!isMessageInfoVisible && (
+                  <View style={[styles.actionSheetReactionRow, { backgroundColor: colors.input }]}>
+                    {QUICK_REACTIONS.map((emoji) => (
+                      <Pressable
+                        accessibilityLabel={`React with ${emoji}`}
+                        accessibilityRole='button'
+                        disabled={isBusy}
+                        key={emoji}
+                        onPress={() => sendMessageActionReaction(messageActionTarget.id, emoji)}
+                        style={[styles.reactionPickerButton, isBusy ? styles.disabled : null]}
+                      >
+                        <Text style={styles.reactionPickerEmoji}>{emoji}</Text>
+                      </Pressable>
+                    ))}
+                  </View>
+                )}
                 <View style={[styles.actionSheetDivider, { backgroundColor: colors.border }]} />
                 {isMessageInfoVisible
                   ? (
@@ -1796,9 +1811,6 @@ export function PeerChatScreen ({
                     <>
                       <Pressable accessibilityRole='button' onPress={() => replyToMessage(messageActionTarget)} style={styles.actionSheetAction}>
                         <Text style={[styles.actionSheetActionText, { color: colors.text }]}>Reply</Text>
-                      </Pressable>
-                      <Pressable accessibilityRole='button' onPress={() => reactToMessage(messageActionTarget)} style={styles.actionSheetAction}>
-                        <Text style={[styles.actionSheetActionText, { color: colors.text }]}>React</Text>
                       </Pressable>
                       <Pressable accessibilityRole='button' onPress={() => copyMessageText(messageActionTarget)} style={styles.actionSheetAction}>
                         <Text style={[styles.actionSheetActionText, { color: colors.text }]}>Copy text</Text>
@@ -2776,6 +2788,7 @@ const styles = StyleSheet.create({
   actionSheet: { borderTopLeftRadius: 20, borderTopRightRadius: 20, paddingBottom: 18, paddingHorizontal: 18, paddingTop: 16 },
   actionSheetTitle: { fontSize: 16, fontWeight: '800' },
   actionSheetPreview: { fontSize: 13, lineHeight: 18, marginTop: 4 },
+  actionSheetReactionRow: { alignItems: 'center', borderRadius: 20, flexDirection: 'row', justifyContent: 'space-around', marginTop: 12, paddingHorizontal: 6, paddingVertical: 3 },
   actionSheetDivider: { height: StyleSheet.hairlineWidth, marginVertical: 12 },
   actionSheetDetails: { fontSize: 14, lineHeight: 20, minHeight: 48, paddingVertical: 8 },
   actionSheetAction: { justifyContent: 'center', minHeight: 48, paddingHorizontal: 4 },
