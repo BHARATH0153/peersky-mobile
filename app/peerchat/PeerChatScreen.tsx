@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { File, Paths } from 'expo-file-system'
 import * as DocumentPicker from 'expo-document-picker'
 import { useAudioPlayer } from 'expo-audio'
@@ -46,6 +46,12 @@ import {
   PEERCHAT_SEARCH_QUERY_MAX_CHARACTERS
 } from './message-search.mjs'
 import { normalizePeerChatMentionSpacing, splitPeerChatMentions } from './message-text.mjs'
+import {
+  createPeerChatEmojiEntries,
+  filterPeerChatEmojiEntries,
+  PEERCHAT_EMOJI_SEARCH_MAX_CHARACTERS
+} from './emoji-search.mjs'
+import { mergePeerChatProfile } from './profile-state.mjs'
 import {
   createPeerChatAvatarDataUrl,
   MAX_PEERCHAT_AVATAR_FILE_BYTES
@@ -210,6 +216,9 @@ type PeerChatScreenProps = {
 const POLL_INTERVAL_MS = 1500
 const ROOM_LIST_POLL_INTERVAL_MS = 3000
 const QUICK_REACTIONS = ['👍', '❤️', '😂', '😮', '😢', '🔥']
+const PEERCHAT_EMOJI_ENTRIES = createPeerChatEmojiEntries(
+  require('../../assets/peerchat/emojilib-emoji-en-US.json')
+)
 const PEERCHAT_ICON = require('../../assets/images/peerchat.png')
 const PEERCHAT_INTRO_FILE = new File(Paths.document, 'peerchat-intro.json')
 
@@ -306,6 +315,7 @@ export function PeerChatScreen ({
   const [editRoomAvatar, setEditRoomAvatar] = useState<string | null>(null)
   const [memberSearchQuery, setMemberSearchQuery] = useState('')
   const [showComposerEmoji, setShowComposerEmoji] = useState(false)
+  const [emojiSearchQuery, setEmojiSearchQuery] = useState('')
   const [landingAction, setLandingAction] = useState<LandingAction>(null)
   const [restoredUiState, setRestoredUiState] = useState<PeerChatUiState | null>(null)
   const sendSoundPlayer = useAudioPlayer(require('../../assets/sounds/peerchat/send.mp3'))
@@ -323,6 +333,10 @@ export function PeerChatScreen ({
     activeRoom?.members || [],
     memberSearchQuery
   ) as PeerChatMember[]
+  const visibleEmoji = useMemo(
+    () => filterPeerChatEmojiEntries(PEERCHAT_EMOJI_ENTRIES, emojiSearchQuery),
+    [emojiSearchQuery]
+  )
 
   const playChatSound = useCallback((player: typeof sendSoundPlayer) => {
     if (!soundsEnabled) return
@@ -580,9 +594,7 @@ export function PeerChatScreen ({
         const response = await callRpc(RPC_PEERCHAT_ROOMS, {})
         if (!response.ok) throw new Error(response.error || 'Unable to refresh PeerChat rooms.')
         if (cancelled || !mountedRef.current) return
-        if (response.profile) {
-          setProfile(response.profile)
-        }
+        if (response.profile) setProfile((current) => mergePeerChatProfile(current, response.profile))
         setRooms(response.rooms || [])
         setPendingDirectMessages(response.pendingDirectMessages || [])
         if (Number.isSafeInteger(response.version)) versionRef.current = response.version as number
@@ -739,6 +751,7 @@ export function PeerChatScreen ({
     setEditRoomAvatar(room.avatar || null)
     setMemberSearchQuery('')
     setShowComposerEmoji(false)
+    setEmojiSearchQuery('')
     captureUnreadBoundary()
     setActiveRoom(room)
     setRooms((current) => current.map((item) => item.roomKey === room.roomKey
@@ -746,6 +759,12 @@ export function PeerChatScreen ({
       : item))
     setError(null)
     onStatus(`Opened PeerChat room ${room.name}`)
+  }
+
+  function insertComposerEmoji (emoji: string) {
+    setComposer((current) => `${current}${emoji}`)
+    setEmojiSearchQuery('')
+    setShowComposerEmoji(false)
   }
 
   function captureUnreadBoundary () {
@@ -1636,18 +1655,52 @@ export function PeerChatScreen ({
           </View>
         )}
         {showComposerEmoji && (
-          <View style={[styles.reactionPicker, { borderTopColor: colors.border, backgroundColor: colors.input }]}>
-            {QUICK_REACTIONS.map((emoji) => (
-              <Pressable
-                accessibilityLabel={`Insert ${emoji}`}
-                accessibilityRole='button'
-                key={emoji}
-                onPress={() => setComposer((current) => `${current}${emoji}`)}
-                style={styles.reactionPickerButton}
-              >
-                <Text style={styles.reactionPickerEmoji}>{emoji}</Text>
-              </Pressable>
-            ))}
+          <View style={[styles.emojiPanel, { borderTopColor: colors.border, backgroundColor: colors.surface }]}>
+            <View style={styles.emojiQuickRow}>
+              {QUICK_REACTIONS.map((emoji) => (
+                <Pressable
+                  accessibilityLabel={`Insert ${emoji}`}
+                  accessibilityRole='button'
+                  key={emoji}
+                  onPress={() => insertComposerEmoji(emoji)}
+                  style={styles.reactionPickerButton}
+                >
+                  <Text style={styles.reactionPickerEmoji}>{emoji}</Text>
+                </Pressable>
+              ))}
+            </View>
+            <TextInput
+              autoCapitalize='none'
+              autoCorrect={false}
+              maxLength={PEERCHAT_EMOJI_SEARCH_MAX_CHARACTERS}
+              onChangeText={setEmojiSearchQuery}
+              placeholder='Search emoji, e.g. cat'
+              placeholderTextColor={colors.muted}
+              style={[styles.emojiSearch, { backgroundColor: colors.input, color: colors.text }]}
+              value={emojiSearchQuery}
+            />
+            <FlatList
+              contentContainerStyle={styles.emojiGrid}
+              data={visibleEmoji}
+              initialNumToRender={64}
+              keyboardShouldPersistTaps='handled'
+              keyExtractor={(item) => item.emoji}
+              ListEmptyComponent={<Text style={[styles.emojiEmpty, { color: colors.muted }]}>No emoji found</Text>}
+              maxToRenderPerBatch={64}
+              numColumns={8}
+              renderItem={({ item }) => (
+                <Pressable
+                  accessibilityLabel={`Insert ${item.keywords[0]?.replaceAll('_', ' ') || item.emoji}`}
+                  accessibilityRole='button'
+                  onPress={() => insertComposerEmoji(item.emoji)}
+                  style={styles.emojiGridButton}
+                >
+                  <Text style={styles.reactionPickerEmoji}>{item.emoji}</Text>
+                </Pressable>
+              )}
+              style={styles.emojiGridList}
+              windowSize={4}
+            />
           </View>
         )}
         <View style={[styles.composer, { borderTopColor: colors.border }]}> 
@@ -1655,7 +1708,10 @@ export function PeerChatScreen ({
             accessibilityLabel='Choose emoji'
             accessibilityRole='button'
             disabled={isBusy || activeRoom.pendingAcceptance || activeRoom.rejected}
-            onPress={() => setShowComposerEmoji((current) => !current)}
+            onPress={() => {
+              setEmojiSearchQuery('')
+              setShowComposerEmoji((current) => !current)
+            }}
             style={[styles.emojiButton, { backgroundColor: colors.input }]}
           >
             <Text style={[styles.emojiButtonText, { color: colors.accent }]}>:)</Text>
@@ -2693,6 +2749,13 @@ const styles = StyleSheet.create({
   reactionPicker: { alignItems: 'center', borderTopWidth: 1, flexDirection: 'row', justifyContent: 'space-around', paddingHorizontal: 8, paddingVertical: 6 },
   reactionPickerButton: { alignItems: 'center', borderRadius: 18, height: 36, justifyContent: 'center', width: 36 },
   reactionPickerEmoji: { fontSize: 22 },
+  emojiPanel: { borderTopWidth: 1, gap: 7, maxHeight: 260, paddingHorizontal: 10, paddingVertical: 8 },
+  emojiQuickRow: { alignItems: 'center', flexDirection: 'row', justifyContent: 'space-around' },
+  emojiSearch: { borderRadius: 10, fontSize: 14, minHeight: 38, paddingHorizontal: 12, paddingVertical: 7 },
+  emojiGridList: { flexGrow: 0, height: 150 },
+  emojiGrid: { paddingBottom: 8 },
+  emojiGridButton: { alignItems: 'center', flex: 1, height: 42, justifyContent: 'center' },
+  emojiEmpty: { flex: 1, fontSize: 13, paddingVertical: 24, textAlign: 'center' },
   replyComposer: { alignItems: 'center', borderTopWidth: 1, flexDirection: 'row', gap: 8, paddingHorizontal: 14, paddingVertical: 7 },
   replyComposerCopy: { flex: 1 },
   mentionSuggestions: { borderTopWidth: 1, paddingVertical: 6 },
