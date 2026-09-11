@@ -2728,13 +2728,22 @@ export default function App () {
                     style={styles.browserShortcut}
                     onPress={() => void loadBrowserUrl(app.url)}
                   >
-                    <View style={[
-                      styles.browserShortcutIcon,
-                      app.iconSource ? null : getRuntimeAppIconStyle(app.id)
-                    ]}>
-                      {app.iconSource
-                        ? <Image source={app.iconSource} style={styles.browserShortcutIconImage} />
-                        : <Text style={styles.browserShortcutIconText}>{app.icon}</Text>}
+                    <View style={styles.browserShortcutIconFrame}>
+                      <View style={[
+                        styles.browserShortcutIcon,
+                        app.iconSource ? null : getRuntimeAppIconStyle(app.id)
+                      ]}>
+                        {app.iconSource
+                          ? <Image source={app.iconSource} style={styles.browserShortcutIconImage} />
+                          : <Text style={styles.browserShortcutIconText}>{app.icon}</Text>}
+                      </View>
+                      {app.id === 'peerchat' && peerChatNotifications.unreadTotal > 0 && (
+                        <View style={styles.browserShortcutBadge}>
+                          <Text style={styles.browserShortcutBadgeText}>
+                            {peerChatNotifications.unreadTotal > 99 ? '99+' : peerChatNotifications.unreadTotal}
+                          </Text>
+                        </View>
+                      )}
                     </View>
                     <Text numberOfLines={2} style={[styles.browserShortcutTitle, { color: browserChrome.text }]}>
                       {app.title}

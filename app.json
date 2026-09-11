@@ -45,6 +45,8 @@
         "android.permission.ACCESS_WIFI_STATE",
         "android.permission.CAMERA",
         "android.permission.CHANGE_WIFI_MULTICAST_STATE",
+        "android.permission.FOREGROUND_SERVICE",
+        "android.permission.FOREGROUND_SERVICE_REMOTE_MESSAGING",
         "android.permission.RECORD_AUDIO",
         "android.permission.REQUEST_INSTALL_PACKAGES"
       ],
@@ -83,6 +85,7 @@
       "./plugins/with-android-loopback-cleartext",
       "./plugins/with-browser-downloads",
       "./plugins/with-lan-discovery",
+      "./plugins/with-peerchat-background",
       [
         "expo-notifications",
         {

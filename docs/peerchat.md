@@ -76,10 +76,12 @@ message to make this device fetch an arbitrary preview URL.
 
 Message notifications require native notification permission and can be
 disabled globally or suppressed by muting a room. Sound can be disabled without
-disabling the notification itself. Notifications are generated only while the
-PeerSky app process is alive and receiving PeerChat updates. This implementation
-does not include a background push service and does not promise notifications
-after the operating system kills the app.
+disabling the notification itself. On Android, enabling notifications starts a
+visible foreground service so the local PeerChat runtime can remain connected
+while the app is backgrounded. Android and supported iOS launchers receive the
+current unread badge total, and the PeerChat home shortcut shows the same total.
+On iOS, background delivery is best effort only: messages can arrive until iOS
+suspends PeerSky because PeerChat deliberately has no centralized push server.
 
 ## Storage and deletion
 

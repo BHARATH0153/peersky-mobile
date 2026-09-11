@@ -327,6 +327,28 @@ export const styles = StyleSheet.create({
     overflow: 'hidden',
     width: 64
   },
+  browserShortcutIconFrame: {
+    position: 'relative'
+  },
+  browserShortcutBadge: {
+    alignItems: 'center',
+    backgroundColor: '#d92d20',
+    borderColor: '#ffffff',
+    borderRadius: 10,
+    borderWidth: 2,
+    justifyContent: 'center',
+    minHeight: 20,
+    minWidth: 20,
+    paddingHorizontal: 4,
+    position: 'absolute',
+    right: -7,
+    top: -7
+  },
+  browserShortcutBadgeText: {
+    color: '#ffffff',
+    fontSize: 10,
+    fontWeight: '900'
+  },
   browserShortcutIconImage: {
     height: 80,
     width: 80

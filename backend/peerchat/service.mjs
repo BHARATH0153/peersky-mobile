@@ -277,6 +277,15 @@ export class PeerChatService {
       })
   }
 
+  getUnreadTotal () {
+    let total = 0
+    for (const room of this.rooms.values()) {
+      total += normalizeUnreadCount(room.unreadCount)
+      if (total >= Number.MAX_SAFE_INTEGER) return Number.MAX_SAFE_INTEGER
+    }
+    return total
+  }
+
   listPendingDirectMessages () {
     return [...this.pendingDirectMessages.values()]
       .sort((left, right) => right.receivedAt - left.receivedAt)

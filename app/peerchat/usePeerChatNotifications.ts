@@ -14,9 +14,11 @@ import {
   hasPeerChatNotificationPermission,
   presentPeerChatNotification,
   preparePeerChatNotifications,
-  requestPeerChatNotificationPermission
+  requestPeerChatNotificationPermission,
+  setPeerChatBadgeCount
 } from './notifications'
 import { playPeerChatSound } from './sounds'
+import { setPeerChatBackgroundEnabled } from './background-service'
 
 type NotificationRoom = {
   roomKey: string
@@ -35,6 +37,7 @@ type NotificationRpcResponse = {
   ok: boolean
   error?: string
   rooms?: NotificationRoom[]
+  unreadTotal?: number
 }
 
 type NotificationPreferences = {
@@ -59,17 +62,19 @@ export function usePeerChatNotifications ({
     ...DEFAULT_PEERCHAT_NOTIFICATION_PREFERENCES
   })
   const [isReady, setIsReady] = useState(false)
+  const [unreadTotal, setUnreadTotal] = useState(0)
   const callRpcRef = useRef(onCallRpc)
   const isPeerChatVisibleRef = useRef(isPeerChatVisible)
   const preferencesRef = useRef(preferences)
   const previousRoomsRef = useRef<NotificationRoom[] | null>(null)
   const pollInFlightRef = useRef(false)
   const warnedRef = useRef(false)
+  const badgeCountRef = useRef(-1)
+  const badgeWarningRef = useRef(false)
 
   callRpcRef.current = onCallRpc
   isPeerChatVisibleRef.current = isPeerChatVisible
   preferencesRef.current = preferences
-  const shouldPoll = preferences.notifications || (isPeerChatVisible && preferences.sounds)
 
   useEffect(() => {
     try {
@@ -114,7 +119,27 @@ export function usePeerChatNotifications ({
   }, [persistPreferences])
 
   useEffect(() => {
-    if (!isReady || !isRuntimeReady || !shouldPoll) {
+    if (!isReady) return
+    void setPeerChatBackgroundEnabled(isRuntimeReady && preferences.notifications).catch((error) => {
+      console.warn('Unable to update PeerChat background service:', error)
+    })
+  }, [isReady, isRuntimeReady, preferences.notifications])
+
+  useEffect(() => {
+    if (!isReady || isRuntimeReady) return
+    previousRoomsRef.current = null
+    badgeCountRef.current = 0
+    setUnreadTotal(0)
+    void setPeerChatBadgeCount(0).catch((error) => {
+      if (!badgeWarningRef.current) {
+        badgeWarningRef.current = true
+        console.warn('Unable to clear PeerChat badge:', error)
+      }
+    })
+  }, [isReady, isRuntimeReady])
+
+  useEffect(() => {
+    if (!isReady || !isRuntimeReady) {
       previousRoomsRef.current = null
       return
     }
@@ -123,7 +148,8 @@ export function usePeerChatNotifications ({
     let timer: ReturnType<typeof setTimeout> | null = null
 
     const poll = async () => {
-      if (cancelled || pollInFlightRef.current || AppState.currentState !== 'active') return
+      if (cancelled || pollInFlightRef.current) return
+      if (AppState.currentState !== 'active' && !preferencesRef.current.notifications) return
       pollInFlightRef.current = true
       try {
         const response = await callRpcRef.current(RPC_PEERCHAT_ROOMS, {})
@@ -131,6 +157,20 @@ export function usePeerChatNotifications ({
         if (cancelled) return
 
         const nextRooms = Array.isArray(response.rooms) ? response.rooms : []
+        const nextUnreadTotal = normalizeUnreadTotal(response.unreadTotal, nextRooms)
+        setUnreadTotal(nextUnreadTotal)
+        if (badgeCountRef.current !== nextUnreadTotal) {
+          badgeCountRef.current = nextUnreadTotal
+          try {
+            await setPeerChatBadgeCount(nextUnreadTotal)
+            badgeWarningRef.current = false
+          } catch (error) {
+            if (!badgeWarningRef.current) {
+              badgeWarningRef.current = true
+              console.warn('Unable to update PeerChat badge:', error)
+            }
+          }
+        }
         const previousRooms = previousRoomsRef.current
         previousRoomsRef.current = nextRooms
         warnedRef.current = false
@@ -180,13 +220,24 @@ export function usePeerChatNotifications ({
       if (timer) clearTimeout(timer)
       subscription.remove()
     }
-  }, [isReady, isRuntimeReady, shouldPoll])
+  }, [isReady, isRuntimeReady])
 
   return {
     isReady,
     notificationsEnabled: preferences.notifications,
     setNotificationsEnabled,
     setSoundsEnabled,
-    soundsEnabled: preferences.sounds
+    soundsEnabled: preferences.sounds,
+    unreadTotal
   }
+}
+
+function normalizeUnreadTotal (value: unknown, rooms: NotificationRoom[]) {
+  if (Number.isSafeInteger(value) && Number(value) >= 0) return Math.min(Number(value), 9999)
+  return Math.min(9999, rooms.reduce((total, room) => {
+    const unread = Number.isSafeInteger(room.unreadCount) && Number(room.unreadCount) > 0
+      ? Number(room.unreadCount)
+      : 0
+    return total + unread
+  }, 0))
 }

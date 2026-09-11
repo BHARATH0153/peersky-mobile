@@ -205,6 +205,7 @@ export type PeerChatResponse = {
   sent?: PeerChatMessage
   item?: { name: string, url: string, byteLength?: number }
   pendingDirectMessages?: PeerChatDirectInvite[]
+  unreadTotal?: number
   mediaType?: 'image' | 'video' | 'audio'
   mediaUrl?: string
 }
@@ -2111,7 +2112,11 @@ export function PeerChatScreen ({
                   >
                     <View style={styles.preferenceCopy}>
                       <Text style={[styles.memberName, { color: colors.text }]}>Message notifications</Text>
-                      <Text style={[styles.attachmentMeta, { color: colors.muted }]}>Notify for unread messages while PeerSky is running</Text>
+                      <Text style={[styles.attachmentMeta, { color: colors.muted }]}>
+                        {Platform.OS === 'ios'
+                          ? 'Background delivery is best effort and stops when iOS suspends PeerSky'
+                          : 'Keep PeerChat connected and notify for unread messages in the background'}
+                      </Text>
                     </View>
                     <Text style={[styles.preferenceState, { color: notificationsEnabled ? colors.accent : colors.muted }]}>
                       {notificationsEnabled ? 'On' : 'Off'}

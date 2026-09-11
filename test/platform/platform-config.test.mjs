@@ -8,6 +8,7 @@ const { addMulticastLock } = require('../../plugins/with-lan-discovery.js')
 
 const ANDROID_LOOPBACK_CLEARTEXT_PLUGIN = './plugins/with-android-loopback-cleartext'
 const LAN_DISCOVERY_PLUGIN = './plugins/with-lan-discovery'
+const PEERCHAT_BACKGROUND_PLUGIN = './plugins/with-peerchat-background'
 const EXPO_NOTIFICATIONS_PLUGIN = 'expo-notifications'
 const EXPO_AUDIO_PLUGIN = 'expo-audio'
 const REPO_ROOT = new URL('../../', import.meta.url)
@@ -56,6 +57,8 @@ describe('mobile platform runtime configuration', () => {
       'android.permission.ACCESS_WIFI_STATE',
       'android.permission.CAMERA',
       'android.permission.CHANGE_WIFI_MULTICAST_STATE',
+      'android.permission.FOREGROUND_SERVICE',
+      'android.permission.FOREGROUND_SERVICE_REMOTE_MESSAGING',
       'android.permission.RECORD_AUDIO',
       'android.permission.REQUEST_INSTALL_PACKAGES'
     ])
@@ -107,7 +110,17 @@ describe('mobile platform runtime configuration', () => {
       }
     ])
     assert.equal(hasExpoPlugin(plugins, EXPO_AUDIO_PLUGIN), true)
+    assert.equal(hasExpoPlugin(plugins, PEERCHAT_BACKGROUND_PLUGIN), true)
     assert.equal(appJson.expo?.android?.softwareKeyboardLayoutMode, 'resize')
+    const backgroundPlugin = await readFile(repoFile('plugins/with-peerchat-background.js'), 'utf8')
+    const backgroundService = await readFile(
+      repoFile('plugins/templates/PeerChatBackgroundService.kt.template'),
+      'utf8'
+    )
+    assert.match(backgroundPlugin, /FOREGROUND_SERVICE_REMOTE_MESSAGING/)
+    assert.match(backgroundPlugin, /foregroundServiceType': 'remoteMessaging'/)
+    assert.match(backgroundService, /startForeground\(NOTIFICATION_ID, notification\)/)
+    assert.match(backgroundService, /START_NOT_STICKY/)
   })
 
   it('configures local discovery on Android and iOS', async () => {

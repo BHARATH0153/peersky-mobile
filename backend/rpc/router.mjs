@@ -340,6 +340,7 @@ export async function routeRpcRequest (req) {
         ok: true,
         profile: peerChat.getProfile(),
         rooms: peerChat.listRooms(),
+        unreadTotal: peerChat.getUnreadTotal(),
         pendingDirectMessages: peerChat.listPendingDirectMessages(),
         version: peerChat.version
       })
@@ -388,6 +389,7 @@ export async function routeRpcRequest (req) {
         ok: true,
         profile: peerChat.getProfile(),
         rooms: peerChat.listRooms(),
+        unreadTotal: peerChat.getUnreadTotal(),
         pendingDirectMessages: peerChat.listPendingDirectMessages(),
         version: peerChat.version
       })

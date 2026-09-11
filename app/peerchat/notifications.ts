@@ -9,7 +9,7 @@ let channelsOpening: Promise<void> | null = null
 Notifications.setNotificationHandler({
   handleNotification: async () => ({
     shouldPlaySound: true,
-    shouldSetBadge: false,
+    shouldSetBadge: true,
     shouldShowBanner: true,
     shouldShowList: true
   })
@@ -62,7 +62,7 @@ export async function requestPeerChatNotificationPermission () {
   const permission = await Notifications.requestPermissionsAsync({
     ios: {
       allowAlert: true,
-      allowBadge: false,
+      allowBadge: true,
       allowSound: true
     }
   })
@@ -102,4 +102,8 @@ export async function presentPeerChatNotification ({
       ? { channelId: sounds ? PEERCHAT_SOUND_CHANNEL : PEERCHAT_SILENT_CHANNEL }
       : null
   })
+}
+
+export async function setPeerChatBadgeCount (count: number) {
+  return Notifications.setBadgeCountAsync(Math.max(0, Math.trunc(count)))
 }
