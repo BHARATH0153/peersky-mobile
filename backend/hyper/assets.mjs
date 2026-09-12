@@ -4,6 +4,7 @@ export const MAX_INLINE_ASSETS = 32
 export const MAX_INLINE_ASSET_BYTES = 2 * 1024 * 1024
 export const MAX_INLINE_STYLESHEET_BYTES = 4 * 1024 * 1024
 export const MAX_INLINE_ASSET_TOTAL_BYTES = 8 * 1024 * 1024
+export const MAX_INLINE_CSS_IMPORT_DEPTH = 4
 const INLINE_ASSET_CONCURRENCY = 4
 const MAX_DOWNLOAD_FILENAME_BYTES = 255
 const HYPER_DOWNLOAD_EXTENSION = /[.](?:7z|aab|apk|bin|bz2|deb|dmg|docx?|exe|gz|iso|jar|msi|pdf|rar|rpm|tar|tgz|xlsx?|zip)(?:$|[?#])/i
@@ -87,20 +88,25 @@ export async function inlineHyperAssets ({
 }) {
   const rewrittenDownloads = rewriteHyperDownloadAttributes(html, baseUrl, assetBaseUrl, assetAuthToken)
   const replacements = new Map()
-  let totalBytes = 0
+  const context = createInlineAssetContext(fetch, maxTotalBytes)
   const assetRefs = [...findHyperAssetRefs(rewrittenDownloads, baseUrl)]
     .slice(0, MAX_INLINE_ASSETS)
 
   await runConcurrent(assetRefs, concurrency, async ([source, assetUrl]) => {
-    const asset = await fetchAsDataUrl(fetch, assetUrl)
-    if (!asset || totalBytes + asset.byteLength > maxTotalBytes) return
-
-    totalBytes += asset.byteLength
-    replacements.set(source, asset.dataUrl)
+    const dataUrl = isStylesheetAsset(assetUrl)
+      ? await context.fetchStylesheet(assetUrl)
+      : await context.fetchAsset(assetUrl)
+    if (dataUrl) replacements.set(source, dataUrl)
   })
 
-  return rewriteHyperMediaAttributes(
+  const rewrittenStyles = await rewriteInlineStyleBlocks(
     rewriteHyperAssetAttributes(rewrittenDownloads, baseUrl, replacements),
+    baseUrl,
+    context
+  )
+
+  return rewriteHyperMediaAttributes(
+    rewrittenStyles,
     baseUrl,
     assetBaseUrl,
     assetAuthToken
@@ -331,14 +337,63 @@ function findHyperAssetRefs (html, baseUrl) {
   return refs
 }
 
-async function fetchAsDataUrl (fetch, assetUrl) {
+function createInlineAssetContext (fetch, maxTotalBytes) {
+  const cache = new Map()
+  let totalBytes = 0
+  let requestCount = 0
+
+  const fetchOnce = (assetUrl, stylesheet, depth = 0, ancestors = new Set()) => {
+    if (stylesheet && ancestors.has(assetUrl)) return Promise.resolve(emptyStylesheetDataUrl())
+
+    const cacheKey = `${stylesheet ? 'css' : 'asset'}:${assetUrl}`
+    const cached = cache.get(cacheKey)
+    if (cached) return cached
+    if (requestCount >= MAX_INLINE_ASSETS) return Promise.resolve(null)
+    requestCount += 1
+
+    const pending = (async () => {
+      const asset = await fetchAsset(fetch, assetUrl, stylesheet)
+      if (!asset || totalBytes + asset.byteLength > maxTotalBytes) return null
+      totalBytes += asset.byteLength
+
+      if (!stylesheet) return asset.dataUrl
+      const nextAncestors = new Set(ancestors)
+      nextAncestors.add(assetUrl)
+      const css = await rewriteHyperCss(asset.text, assetUrl, {
+        depth,
+        ancestors: nextAncestors,
+        fetchAsset: (url) => fetchOnce(url, false),
+        fetchStylesheet: (url) => fetchOnce(url, true, depth + 1, nextAncestors)
+      })
+      return stylesheetDataUrl(css)
+    })()
+
+    cache.set(cacheKey, pending)
+    return pending
+  }
+
+  return {
+    fetchAsset: (assetUrl) => fetchOnce(assetUrl, false),
+    fetchStylesheet: (assetUrl) => fetchOnce(assetUrl, true),
+    rewriteCss: (css, cssBaseUrl) => rewriteHyperCss(css, cssBaseUrl, {
+      depth: 0,
+      ancestors: new Set(),
+      fetchAsset: (url) => fetchOnce(url, false),
+      fetchStylesheet: (url) => fetchOnce(url, true, 1, new Set())
+    })
+  }
+}
+
+async function fetchAsset (fetch, assetUrl, stylesheet = false) {
   try {
     const response = await fetch(assetUrl)
     if (!response.ok) return null
 
     const headers = headersToObject(response.headers)
-    const contentType = headers['content-type'] || getContentTypeFromUrl(assetUrl)
-    const byteLimit = getInlineAssetByteLimit(assetUrl, contentType)
+    const contentType = normalizeInlineContentType(headers['content-type'], assetUrl)
+    const byteLimit = stylesheet
+      ? MAX_INLINE_STYLESHEET_BYTES
+      : getInlineAssetByteLimit(assetUrl, contentType)
     const contentLength = Number(headers['content-length'])
     if (Number.isFinite(contentLength) && contentLength > byteLimit) return null
 
@@ -347,11 +402,116 @@ async function fetchAsDataUrl (fetch, assetUrl) {
 
     return {
       dataUrl: `data:${contentType};base64,${b4a.toString(bytes, 'base64')}`,
+      text: stylesheet ? b4a.toString(bytes) : null,
       byteLength: bytes.byteLength
     }
   } catch {
     return null
   }
+}
+
+function normalizeInlineContentType (contentType, assetUrl) {
+  const value = String(contentType || '').split(';', 1)[0].trim().toLowerCase()
+  return /^[a-z0-9!#$&^_.+-]+\/[a-z0-9!#$&^_.+-]+$/.test(value)
+    ? value
+    : getContentTypeFromUrl(assetUrl).split(';', 1)[0]
+}
+
+async function rewriteInlineStyleBlocks (html, baseUrl, context) {
+  return asyncReplace(
+    html,
+    /(<style\b[^>]*>)([\s\S]*?)(<\/style\s*>)/gi,
+    async (match, open, css, close) => `${open}${await context.rewriteCss(css, baseUrl)}${close}`
+  )
+}
+
+async function rewriteHyperCss (css, baseUrl, context) {
+  const comments = []
+  let commentMarker = '__PEERSKY_CSS_COMMENT_'
+  while (String(css || '').includes(commentMarker)) commentMarker += '_'
+  let rewritten = String(css || '').replace(/\/\*[\s\S]*?\*\//g, (comment) => {
+    const marker = `${commentMarker}${comments.length}__`
+    comments.push(comment)
+    return marker
+  })
+
+  if (context.depth < MAX_INLINE_CSS_IMPORT_DEPTH) {
+    rewritten = await asyncReplace(
+      rewritten,
+      /(@import\s+url\(\s*)(["']?)([^"')\s]+)\2(\s*\))/gi,
+      async (match, prefix, quote, source, suffix) => {
+        const assetUrl = resolveHyperAssetUrl(source, baseUrl)
+        if (!assetUrl) return match
+        const dataUrl = await context.fetchStylesheet(assetUrl)
+        return dataUrl ? `${prefix}"${dataUrl}"${suffix}` : match
+      }
+    )
+    rewritten = await asyncReplace(
+      rewritten,
+      /(@import\s+)(["'])([^"']+)\2/gi,
+      async (match, prefix, quote, source) => {
+        const assetUrl = resolveHyperAssetUrl(source, baseUrl)
+        if (!assetUrl) return match
+        const dataUrl = await context.fetchStylesheet(assetUrl)
+        return dataUrl ? `${prefix}"${dataUrl}"` : match
+      }
+    )
+  }
+
+  const imports = []
+  let importMarker = '__PEERSKY_CSS_IMPORT_'
+  while (rewritten.includes(importMarker)) importMarker += '_'
+  rewritten = rewritten.replace(/@import\s+(?:url\([^)]*\)|"[^"]*"|'[^']*')[^;]*;/gi, (statement) => {
+    const marker = `${importMarker}${imports.length}__`
+    imports.push(statement)
+    return marker
+  })
+
+  rewritten = await asyncReplace(
+    rewritten,
+    /(url\(\s*)(["']?)([^"')]+?)\2(\s*\))/gi,
+    async (match, prefix, quote, source, suffix) => {
+      const assetUrl = resolveHyperAssetUrl(source, baseUrl)
+      if (!assetUrl) return match
+      const dataUrl = await context.fetchAsset(assetUrl)
+      return dataUrl ? `${prefix}"${dataUrl}"${suffix}` : match
+    }
+  )
+
+  for (let index = 0; index < imports.length; index++) {
+    rewritten = rewritten.split(`${importMarker}${index}__`).join(imports[index])
+  }
+  for (let index = 0; index < comments.length; index++) {
+    rewritten = rewritten.split(`${commentMarker}${index}__`).join(comments[index])
+  }
+  return rewritten
+}
+
+function stylesheetDataUrl (css) {
+  return `data:text/css;charset=utf-8;base64,${b4a.toString(b4a.from(css), 'base64')}`
+}
+
+function emptyStylesheetDataUrl () {
+  return 'data:text/css;charset=utf-8;base64,'
+}
+
+async function asyncReplace (value, pattern, replacer) {
+  const matches = []
+  for (const match of value.matchAll(pattern)) {
+    matches.push(match)
+    if (matches.length >= MAX_INLINE_ASSETS) break
+  }
+  if (matches.length === 0) return value
+
+  const replacements = await Promise.all(matches.map((match) => replacer(...match)))
+  let result = ''
+  let cursor = 0
+  for (let index = 0; index < matches.length; index++) {
+    const match = matches[index]
+    result += value.slice(cursor, match.index) + replacements[index]
+    cursor = match.index + match[0].length
+  }
+  return result + value.slice(cursor)
 }
 
 async function runConcurrent (items, concurrency, task) {

@@ -1,4 +1,4 @@
-import { mkdirSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { readZipEntries } from './zip.mjs'
 
 const SKIP_ENTRIES = new Set(['manifest.json', 'manifest.mjson'])
@@ -10,6 +10,14 @@ const ALLOWED_FILES = new Set([
   'peersky-chat-rooms.json',
   'peersky-identity.json'
 ])
+const DEVICE_LOCAL_PATHS = [
+  'device-key.json',
+  'hyper-sdk',
+  'hyper-sdk-private',
+  'peerchat-intro.json',
+  'peerchat-ui-state.json',
+  'peerchat-notifications.json'
+]
 
 export async function restoreIdentityFromBackup (innerZipBytes, storagePath) {
   const entries = readZipEntries(innerZipBytes)
@@ -50,6 +58,44 @@ export async function restoreIdentityFromBackup (innerZipBytes, storagePath) {
   }
 
   return { restoredFiles }
+}
+
+export function commitIdentityRestore ({ storagePath, pendingPath, backupPath }) {
+  if (!storagePath || !pendingPath || !backupPath || !existsSync(pendingPath)) {
+    throw new Error('Identity restore paths are invalid')
+  }
+
+  rmSync(backupPath, { recursive: true, force: true })
+  let movedCurrentStorage = false
+  const preservedPaths = []
+
+  try {
+    if (existsSync(storagePath)) {
+      renameSync(storagePath, backupPath)
+      movedCurrentStorage = true
+    }
+
+    for (const relativePath of DEVICE_LOCAL_PATHS) {
+      const source = joinPath(backupPath, relativePath)
+      const destination = joinPath(pendingPath, relativePath)
+      if (!existsSync(source) || existsSync(destination)) continue
+      renameSync(source, destination)
+      preservedPaths.push(relativePath)
+    }
+
+    renameSync(pendingPath, storagePath)
+    return { preservedPaths }
+  } catch (error) {
+    if (!existsSync(storagePath)) {
+      for (const relativePath of preservedPaths.reverse()) {
+        const source = joinPath(pendingPath, relativePath)
+        const destination = joinPath(backupPath, relativePath)
+        if (existsSync(source) && !existsSync(destination)) renameSync(source, destination)
+      }
+      if (movedCurrentStorage && existsSync(backupPath)) renameSync(backupPath, storagePath)
+    }
+    throw error
+  }
 }
 
 function normalizeZipEntryName (name) {

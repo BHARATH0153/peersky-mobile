@@ -68,6 +68,7 @@ export const styles = StyleSheet.create({
   browserAddressActions: {
     alignItems: 'center',
     flexDirection: 'row',
+    height: '100%',
     paddingRight: 3
   },
   browserAddressAction: {
@@ -78,6 +79,12 @@ export const styles = StyleSheet.create({
   },
   browserAddressClearAction: {
     marginRight: 2
+  },
+  browserAddressReloadIcon: {
+    transform: [{ translateY: 1 }]
+  },
+  browserAddressShareIcon: {
+    transform: [{ translateY: 0.5 }]
   },
   browserTabCountButton: {
     alignItems: 'center',
@@ -320,6 +327,28 @@ export const styles = StyleSheet.create({
     overflow: 'hidden',
     width: 64
   },
+  browserShortcutIconFrame: {
+    position: 'relative'
+  },
+  browserShortcutBadge: {
+    alignItems: 'center',
+    backgroundColor: '#d92d20',
+    borderColor: '#ffffff',
+    borderRadius: 10,
+    borderWidth: 2,
+    justifyContent: 'center',
+    minHeight: 20,
+    minWidth: 20,
+    paddingHorizontal: 4,
+    position: 'absolute',
+    right: -7,
+    top: -7
+  },
+  browserShortcutBadgeText: {
+    color: '#ffffff',
+    fontSize: 10,
+    fontWeight: '900'
+  },
   browserShortcutIconImage: {
     height: 80,
     width: 80
@@ -332,6 +361,9 @@ export const styles = StyleSheet.create({
   },
   browserShortcutIconHyper: {
     backgroundColor: '#273b65'
+  },
+  browserShortcutIconPeerchat: {
+    backgroundColor: '#1d513d'
   },
   browserShortcutIconText: {
     color: '#ffffff',
@@ -386,11 +418,6 @@ export const styles = StyleSheet.create({
   browserRestoreText: {
     color: '#596276',
     fontSize: 14
-  },
-  browserLoader: {
-    position: 'absolute',
-    right: 12,
-    top: 98
   },
   p2pmdWorkspace: {
     backgroundColor: '#1f2027',
@@ -705,15 +732,6 @@ export const styles = StyleSheet.create({
     paddingHorizontal: 12,
     paddingVertical: 10
   },
-  result: {
-    backgroundColor: '#f6f6f6',
-    borderRadius: 8,
-    padding: 10
-  },
-  resultText: {
-    fontFamily: 'monospace',
-    fontSize: 12
-  },
   emptyRoomTitle: {
     color: '#f1f2f7',
     fontSize: 15,
@@ -796,6 +814,21 @@ export const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: '800'
   },
+  p2pmdJoinTools: {
+    flexDirection: 'row',
+    gap: 10
+  },
+  p2pmdJoinTool: {
+    alignItems: 'center',
+    borderColor: '#384052',
+    borderRadius: 10,
+    borderWidth: 1,
+    flex: 1,
+    justifyContent: 'center',
+    minHeight: 42,
+    paddingHorizontal: 12,
+    paddingVertical: 9
+  },
   p2pmdRecentRooms: {
     gap: 8
   },
@@ -825,6 +858,69 @@ export const styles = StyleSheet.create({
     color: '#9ec5ff',
     fontSize: 12,
     fontWeight: '800'
+  },
+  p2pmdScanner: {
+    backgroundColor: '#000',
+    flex: 1
+  },
+  p2pmdScannerOverlay: {
+    alignItems: 'center',
+    flex: 1,
+    justifyContent: 'center'
+  },
+  p2pmdScanGuide: {
+    height: 240,
+    width: 240
+  },
+  p2pmdScanCorner: {
+    borderColor: '#fff',
+    height: 42,
+    position: 'absolute',
+    width: 42
+  },
+  p2pmdScanTopLeft: {
+    borderLeftWidth: 4,
+    borderTopWidth: 4,
+    left: 0,
+    top: 0
+  },
+  p2pmdScanTopRight: {
+    borderRightWidth: 4,
+    borderTopWidth: 4,
+    right: 0,
+    top: 0
+  },
+  p2pmdScanBottomLeft: {
+    borderBottomWidth: 4,
+    borderLeftWidth: 4,
+    bottom: 0,
+    left: 0
+  },
+  p2pmdScanBottomRight: {
+    borderBottomWidth: 4,
+    borderRightWidth: 4,
+    bottom: 0,
+    right: 0
+  },
+  p2pmdScanHint: {
+    color: '#fff',
+    fontSize: 14,
+    marginTop: 24,
+    textAlign: 'center'
+  },
+  p2pmdScannerClose: {
+    backgroundColor: 'rgba(0,0,0,.65)',
+    borderRadius: 999,
+    paddingHorizontal: 18,
+    paddingVertical: 10,
+    position: 'absolute',
+    right: 16,
+    top: 12
+  },
+  p2pmdScannerCloseText: {
+    color: '#fff',
+    fontSize: 15,
+    fontWeight: '700'
   },
   roomPill: {
     backgroundColor: '#30364a',

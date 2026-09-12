@@ -2,16 +2,18 @@ import type { ImageSourcePropType } from 'react-native'
 
 import {
   INTERNAL_APPS as INTERNAL_APP_REGISTRY,
+  canUseP2pAppPageActions as canUseP2pAppRegistryPageActions,
   getRuntimeAppFromUrl as getRuntimeAppFromRegistryUrl,
   getRuntimeAppTitle as getRuntimeAppRegistryTitle,
   getRuntimeAppUrl as getRuntimeAppRegistryUrl
 } from './internal-apps-registry.mjs'
 
-export type RuntimeTab = 'hyper' | 'holesail' | 'p2pmd'
+export type RuntimeTab = 'hyper' | 'holesail' | 'p2pmd' | 'peerchat'
 
 const INTERNAL_APP_ICONS: Partial<Record<RuntimeTab, ImageSourcePropType>> = {
   hyper: require('../assets/images/hyperdrive.png'),
-  p2pmd: require('../assets/images/p2pmd.png')
+  p2pmd: require('../assets/images/p2pmd.png'),
+  peerchat: require('../assets/images/peerchat.png')
 }
 
 export const BROWSER_HOME_ICON: ImageSourcePropType = require('../assets/images/icon.png')
@@ -36,6 +38,10 @@ export function getRuntimeAppFromUrl (targetUrl: string) {
 
 export function getRuntimeAppTitle (app: RuntimeTab) {
   return getRuntimeAppRegistryTitle(app)
+}
+
+export function canUseP2pAppPageActions (app: RuntimeTab, targetUrl: string) {
+  return canUseP2pAppRegistryPageActions(app, targetUrl)
 }
 
 export function getRuntimeAppIconSource (app: RuntimeTab) {

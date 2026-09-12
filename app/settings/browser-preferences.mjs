@@ -5,6 +5,7 @@ export const DEFAULT_BROWSER_PREFERENCES = {
   addressBarPosition: 'top',
   contentBlockingEnabled: true,
   customSearchUrl: '',
+  downloadOnlyOnWifi: false,
   enforceManualPageZoom: false,
   externalLinkBehavior: 'ask',
   restoreTabsOnStartup: true,
@@ -41,6 +42,9 @@ export function parseBrowserPreferences (serialized) {
       ? value.contentBlockingEnabled
       : DEFAULT_BROWSER_PREFERENCES.contentBlockingEnabled,
     customSearchUrl: normalizeCustomSearchUrl(value?.customSearchUrl) || '',
+    downloadOnlyOnWifi: typeof value?.downloadOnlyOnWifi === 'boolean'
+      ? value.downloadOnlyOnWifi
+      : DEFAULT_BROWSER_PREFERENCES.downloadOnlyOnWifi,
     enforceManualPageZoom: typeof value?.enforceManualPageZoom === 'boolean'
       ? value.enforceManualPageZoom
       : DEFAULT_BROWSER_PREFERENCES.enforceManualPageZoom,

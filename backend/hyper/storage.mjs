@@ -27,6 +27,8 @@ import {
   runP2pCacheClear,
   runP2pDataClear
 } from './storage-lifecycle.mjs'
+import { closePeerChatService } from '../peerchat/runtime.mjs'
+import { closeHyperOfflineDownloads } from './offline-manager.mjs'
 
 let storageTransition = Promise.resolve()
 
@@ -75,7 +77,10 @@ export async function clearP2pCache (options = {}) {
   return withStorageTransition(() => (
     options.getRuntime
       ? performP2pCacheClear(options)
-      : withHyperRuntimeMaintenance(() => performP2pCacheClear(options))
+      : withHyperRuntimeMaintenance(
+        () => performP2pCacheClear(options),
+        closeHyperOfflineDownloads
+      )
   ))
 }
 
@@ -83,7 +88,10 @@ export async function clearAllP2pData (options = {}) {
   return withStorageTransition(() => (
     options.getRuntime
       ? performAllP2pDataClear(options)
-      : withHyperRuntimeMaintenance(() => performAllP2pDataClear(options))
+      : withHyperRuntimeMaintenance(
+        () => performAllP2pDataClear(options),
+        closeHyperOfflineDownloads
+      )
   ))
 }
 
@@ -92,6 +100,7 @@ async function performP2pCacheClear (options) {
   const closeRuntime = options.closeRuntime || closeHyperRuntime
   const resetFetch = options.resetFetch || resetHyperFetch
   const stopAssetServer = options.stopAssetServer || stopHyperAssetServer
+  const closeServices = options.closeServices || closePeerChatService
   const createStore = options.createStore || ((storagePath) => new Corestore(storagePath))
 
   const storagePath = options.storagePath || getHyperStoragePath()
@@ -99,6 +108,7 @@ async function performP2pCacheClear (options) {
     getRuntime,
     storagePath,
     stopAssetServer,
+    closeServices,
     closeRuntime,
     resetFetch,
     createStore,
@@ -112,6 +122,7 @@ function performAllP2pDataClear (options) {
     getRuntime: options.getRuntime || getHyperRuntime,
     getStoragePath: options.getStoragePath || getHyperStoragePath,
     stopAssetServer: options.stopAssetServer || stopHyperAssetServer,
+    closeServices: options.closeServices || closePeerChatService,
     closeRuntime: options.closeRuntime || closeHyperRuntime,
     resetFetch: options.resetFetch || resetHyperFetch,
     removeStorage: options.removeStorage || ((storagePath) => removeHyperStoragePaths({

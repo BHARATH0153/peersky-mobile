@@ -2,6 +2,7 @@ export async function runP2pCacheClear ({
   getRuntime,
   storagePath,
   stopAssetServer,
+  closeServices = async () => {},
   closeRuntime,
   resetFetch,
   createStore,
@@ -15,9 +16,12 @@ export async function runP2pCacheClear ({
   let result
 
   try {
-    await stopAssetServer()
-    await closeRuntime()
-    resetFetch()
+    await closeP2pStorageUsers({
+      stopAssetServer,
+      closeServices,
+      closeRuntime,
+      resetFetch
+    })
 
     store = createStore(storagePath)
     await store.ready()
@@ -44,6 +48,7 @@ export async function runP2pDataClear ({
   getRuntime,
   getStoragePath,
   stopAssetServer,
+  closeServices = async () => {},
   closeRuntime,
   resetFetch,
   removeStorage,
@@ -56,9 +61,12 @@ export async function runP2pDataClear ({
   let result = { ok: true, cleared: true }
 
   try {
-    await stopAssetServer()
-    await closeRuntime()
-    resetFetch()
+    await closeP2pStorageUsers({
+      stopAssetServer,
+      closeServices,
+      closeRuntime,
+      resetFetch
+    })
     removeStorage(storagePath)
     result = await appendCleanupWarning(
       result,
@@ -70,6 +78,23 @@ export async function runP2pDataClear ({
   }
 
   return result
+}
+
+export async function closeP2pStorageUsers ({
+  stopAssetServer,
+  closeServices,
+  closeRuntime,
+  resetFetch
+}) {
+  let firstError = null
+  for (const action of [stopAssetServer, closeServices, closeRuntime, resetFetch]) {
+    try {
+      await action()
+    } catch (error) {
+      if (!firstError) firstError = error
+    }
+  }
+  if (firstError) throw firstError
 }
 
 export function runP2pAppDataDelete ({

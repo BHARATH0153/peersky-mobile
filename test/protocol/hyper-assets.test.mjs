@@ -117,8 +117,22 @@ test('discovers and rewrites quoted and unquoted inline asset attributes', async
     assetAuthToken
   })
 
-  assert.equal(html.match(/data:image\/png;base64,AQ==/g)?.length, 3)
+  assert.equal(html.match(/data:image\/png;base64,AQ==/g)?.length, 2)
+  assert.match(html, /href=['"]data:text\/css;charset=utf-8;base64,AQ==['"]/)
   assert.doesNotMatch(html, /(?:src|href)=data:/)
+})
+
+test('normalizes remote MIME metadata before embedding it in CSS or HTML', async () => {
+  const html = await inlineHyperAssets({
+    html: '<img src="./photo.png">',
+    baseUrl,
+    fetch: async () => assetResponse('image/png";background:url(javascript:alert(1))', Uint8Array.of(1)),
+    assetBaseUrl: 'http://127.0.0.1:45123',
+    assetAuthToken
+  })
+
+  assert.match(html, /src="data:image\/png;base64,AQ=="/)
+  assert.doesNotMatch(html, /javascript:/)
 })
 
 test('sanitizes proxied download filenames', () => {
@@ -185,6 +199,78 @@ test('bounds total inlined bytes while fetching assets concurrently', async () =
 
   assert.equal(html.match(/data:image\/png;base64,AQ==/g)?.length, 2)
   assert.equal(maxActiveFetches, 2)
+})
+
+test('resolves linked stylesheet assets and nested imports against each CSS file', async () => {
+  const responses = new Map([
+    ['hyper://example.com/docs/site.css', cssResponse('@import "./theme/colors.css"; .hero { background: url(../logo.png) }')],
+    ['hyper://example.com/docs/theme/colors.css', cssResponse('.icon { background: url(./icon.svg) }')],
+    ['hyper://example.com/logo.png', assetResponse('image/png', Uint8Array.of(1))],
+    ['hyper://example.com/docs/theme/icon.svg', assetResponse('image/svg+xml', Uint8Array.of(2))]
+  ])
+
+  const html = await inlineHyperAssets({
+    html: '<link rel="stylesheet" href="./site.css">',
+    baseUrl,
+    fetch: async (url) => responses.get(url) || errorAssetResponse(),
+    assetBaseUrl: 'http://127.0.0.1:45123',
+    assetAuthToken
+  })
+
+  const css = decodeDataUrl(html.match(/href="([^"]+)"/)?.[1])
+  assert.match(css, /@import "data:text\/css/)
+  assert.match(css, /url\("data:image\/png;base64,AQ=="\)/)
+
+  const importedCss = decodeDataUrl(css.match(/@import "([^"]+)"/)?.[1])
+  assert.match(importedCss, /url\("data:image\/svg\+xml;base64,Ag=="\)/)
+})
+
+test('rewrites relative assets inside inline style blocks without touching comments', async () => {
+  const html = await inlineHyperAssets({
+    html: '<style>/* url(ignored.png) */ .hero { background: url("./hero.png") }</style>',
+    baseUrl,
+    fetch: async (url) => {
+      assert.equal(url, 'hyper://example.com/docs/hero.png')
+      return assetResponse('image/png', Uint8Array.of(3))
+    },
+    assetBaseUrl: 'http://127.0.0.1:45123',
+    assetAuthToken
+  })
+
+  assert.match(html, /\/\* url\(ignored\.png\) \*\//)
+  assert.match(html, /url\("data:image\/png;base64,Aw=="\)/)
+})
+
+test('breaks circular CSS imports and caps all nested asset requests', async () => {
+  let requests = 0
+  const html = await inlineHyperAssets({
+    html: '<link rel="stylesheet" href="./a.css">',
+    baseUrl,
+    fetch: async (url) => {
+      requests++
+      if (url.endsWith('/a.css')) return cssResponse('@import "./b.css";')
+      if (url.endsWith('/b.css')) return cssResponse('@import "./a.css";')
+      return errorAssetResponse()
+    },
+    assetBaseUrl: 'http://127.0.0.1:45123',
+    assetAuthToken
+  })
+
+  assert.match(html, /href="data:text\/css/)
+  assert.equal(requests, 2)
+})
+
+test('charges nested CSS resources against the total inline byte budget', async () => {
+  const html = await inlineHyperAssets({
+    html: '<style>.one { background: url(one.png) } .two { background: url(two.png) }</style>',
+    baseUrl,
+    fetch: async () => assetResponse('image/png', Uint8Array.of(1, 2)),
+    assetBaseUrl: 'http://127.0.0.1:45123',
+    assetAuthToken,
+    maxTotalBytes: 2
+  })
+
+  assert.equal(html.match(/data:image\/png/g)?.length, 1)
 })
 
 test('normalizes iterable headers to lower-case object keys', () => {
@@ -261,3 +347,26 @@ test('classifies direct Hyper media by MIME or extension', () => {
     null
   )
 })
+
+function cssResponse (css) {
+  return assetResponse('text/css', Buffer.from(css))
+}
+
+function assetResponse (contentType, bytes) {
+  return {
+    ok: true,
+    headers: new Map([['content-type', contentType]]),
+    async arrayBuffer () {
+      return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength)
+    }
+  }
+}
+
+function errorAssetResponse () {
+  return { ok: false, headers: new Map() }
+}
+
+function decodeDataUrl (dataUrl = '') {
+  const encoded = dataUrl.split(',', 2)[1] || ''
+  return Buffer.from(encoded, 'base64').toString()
+}
