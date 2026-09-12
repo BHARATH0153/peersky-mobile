@@ -202,15 +202,18 @@ test('PeerChat preserves desktop-compatible Hyperdrive attachment metadata', asy
     roomKey: room.roomKey,
     message: url,
     fileName: 'report.pdf',
-    fileSize: 2048
+    fileSize: 2048,
+    fileEnc: true
   })
   assert.equal(sent.fileName, 'report.pdf')
   assert.equal(sent.fileSize, 2048)
+  assert.equal(sent.fileEnc, true)
 
   const snapshot = await service.getSnapshot({ roomKey: room.roomKey, version: -1 })
   assert.equal(snapshot.messages[0].message, url)
   assert.equal(snapshot.messages[0].fileName, 'report.pdf')
   assert.equal(snapshot.messages[0].fileSize, 2048)
+  assert.equal(snapshot.messages[0].fileEnc, true)
   await service.close()
 })
 

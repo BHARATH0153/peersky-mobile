@@ -130,6 +130,10 @@ export class PeerChatService {
     }
   }
 
+  hasRoom (roomKey) {
+    return this.rooms.has(normalizePeerChatRoomKey(roomKey))
+  }
+
   setProfile ({ username, bio, avatar, linkPreview }) {
     const normalized = normalizePeerChatProfileName(username)
     if (!normalized) {
@@ -457,7 +461,7 @@ export class PeerChatService {
     }
   }
 
-  async sendMessage ({ roomKey, message, replyTo, fileName, fileSize, preview }) {
+  async sendMessage ({ roomKey, message, replyTo, fileName, fileSize, fileEnc, preview }) {
     const normalizedRoomKey = normalizePeerChatRoomKey(roomKey)
     const room = this.rooms.get(normalizedRoomKey)
     if (!room) throw new Error('PeerChat room not found.')
@@ -505,7 +509,8 @@ export class PeerChatService {
     const attachment = normalizePeerChatAttachment({
       message: normalizedMessage,
       fileName,
-      fileSize
+      fileSize,
+      fileEnc
     })
     const entry = {
       id: createPeerChatMessageId(),
@@ -1061,7 +1066,8 @@ export class PeerChatService {
     const attachment = normalizePeerChatAttachment({
       message: normalizedMessage,
       fileName: message.fileName,
-      fileSize: message.fileSize
+      fileSize: message.fileSize,
+      fileEnc: message.fileEnc
     })
     const entry = {
       id: message.id,
@@ -1461,7 +1467,8 @@ export class PeerChatService {
       ...(normalizePeerChatAttachment({
         message,
         fileName: entry.fileName,
-        fileSize: entry.fileSize
+        fileSize: entry.fileSize,
+        fileEnc: entry.fileEnc
       }) || {}),
       replyTo: normalizePeerChatReply(entry.replyTo),
       timestamp: normalizePeerChatTimestamp(entry.ts),

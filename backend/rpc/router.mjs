@@ -40,7 +40,9 @@ import {
   RPC_PEERCHAT_DM_CREATE,
   RPC_PEERCHAT_DM_ACCEPT,
   RPC_PEERCHAT_DM_REJECT,
-  RPC_PEERCHAT_ONBOARD
+  RPC_PEERCHAT_ONBOARD,
+  RPC_PEERCHAT_ATTACHMENT_UPLOAD,
+  RPC_PEERCHAT_ATTACHMENT_OPEN
 } from './commands.mjs'
 import {
   getDefaultIdentityStoragePath,
@@ -50,8 +52,8 @@ import {
 import { decryptIdentityTransfer } from '../backup/identity-transfer.mjs'
 import { randomBytes } from 'node:crypto'
 import b4a from 'b4a'
-import { rmSync, renameSync } from 'bare-fs'
-import { restoreIdentityFromBackup } from '../backup/restore.mjs'
+import { rmSync } from 'bare-fs'
+import { commitIdentityRestore, restoreIdentityFromBackup } from '../backup/restore.mjs'
 
 import { createDrive, publishMarkdownDocument, readHyperFile, uploadHyperFile } from '../hyper/drive.mjs'
 import { listHyperdriveLocation, uploadHyperdriveFile } from '../hyper/library.mjs'
@@ -89,6 +91,7 @@ import { getP2pmdEditorPage } from '../p2pmd/server.mjs'
 import { hasIeeeMarker } from '../p2pmd/templates.mjs'
 import { parseJsonMessage, replyJson } from './messages.mjs'
 import { closePeerChatService, getPeerChatService } from '../peerchat/runtime.mjs'
+import { openPeerChatAttachment, uploadPeerChatAttachment } from '../peerchat/attachments.mjs'
 
 let currentIdentityNonce = null
 let pendingRestorePath = null
@@ -228,9 +231,11 @@ export async function routeRpcRequest (req) {
         resetHyperFetch()
 
         try {
-          try { rmSync(backupPath, { recursive: true }) } catch (e) {}
-          try { renameSync(storagePath, backupPath) } catch (e) {}
-          renameSync(pendingRestorePath, storagePath)
+          commitIdentityRestore({
+            storagePath,
+            pendingPath: pendingRestorePath,
+            backupPath
+          })
           pendingRestorePath = null
         } catch (err) {
           return { ok: false, error: `Atomic swap failed: ${err.message}` }
@@ -412,6 +417,28 @@ export async function routeRpcRequest (req) {
         sent: await peerChat.sendMessage(parseJsonMessage(req.data)),
         version: peerChat.version
       })
+      return
+    }
+
+    if (req.command === RPC_PEERCHAT_ATTACHMENT_UPLOAD) {
+      const body = parseJsonMessage(req.data)
+      const peerChat = await getPeerChatService()
+      if (!peerChat.hasRoom(body.roomKey)) {
+        replyJson(req, { ok: false, error: 'PeerChat room not found.' })
+        return
+      }
+      replyJson(req, await uploadPeerChatAttachment(body))
+      return
+    }
+
+    if (req.command === RPC_PEERCHAT_ATTACHMENT_OPEN) {
+      const body = parseJsonMessage(req.data)
+      const peerChat = await getPeerChatService()
+      if (!peerChat.hasRoom(body.roomKey)) {
+        replyJson(req, { ok: false, error: 'PeerChat room not found.' })
+        return
+      }
+      replyJson(req, await openPeerChatAttachment(body))
       return
     }
 

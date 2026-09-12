@@ -58,8 +58,9 @@ import {
   MAX_PEERCHAT_AVATAR_FILE_BYTES
 } from './avatar.mjs'
 import {
-  RPC_HYPER_LIBRARY_UPLOAD,
   RPC_HYPER_FETCH,
+  RPC_PEERCHAT_ATTACHMENT_OPEN,
+  RPC_PEERCHAT_ATTACHMENT_UPLOAD,
   RPC_PEERCHAT_DM_ACCEPT,
   RPC_PEERCHAT_DM_CREATE,
   RPC_PEERCHAT_DM_REJECT,
@@ -99,6 +100,7 @@ type PeerChatMessage = {
   reactions?: PeerChatReactionSummary[]
   fileName?: string
   fileSize?: number
+  fileEnc?: boolean
   preview?: PeerChatLinkPreview | null
   system?: boolean
 }
@@ -208,6 +210,7 @@ export type PeerChatResponse = {
   unreadTotal?: number
   mediaType?: 'image' | 'video' | 'audio'
   mediaUrl?: string
+  localUri?: string
 }
 
 type PeerChatScreenProps = {
@@ -216,6 +219,7 @@ type PeerChatScreenProps = {
   notificationsEnabled: boolean
   onCallRpc: (command: number, data?: object) => Promise<PeerChatResponse>
   onNotificationsEnabledChange: (enabled: boolean) => Promise<boolean>
+  onOpenLocalFile: (uri: string, name: string) => Promise<boolean>
   onOpenUrl: (url: string) => void
   onSoundsEnabledChange: (enabled: boolean) => boolean
   onStatus: (message: string) => void
@@ -258,6 +262,7 @@ export function PeerChatScreen ({
   notificationsEnabled,
   onCallRpc,
   onNotificationsEnabledChange,
+  onOpenLocalFile,
   onOpenUrl,
   onSoundsEnabledChange,
   onStatus,
@@ -1018,25 +1023,25 @@ export function PeerChatScreen ({
         throw new Error('Choose a non-empty file.')
       }
 
-      const upload = await callRpc(RPC_HYPER_LIBRARY_UPLOAD, {
-        name: asset.name,
+      const upload = await callRpc(RPC_PEERCHAT_ATTACHMENT_UPLOAD, {
+        roomKey: activeRoom.roomKey,
         fileUri: file.uri,
-        byteLength: fileSize,
-        visibility: 'public'
+        byteLength: fileSize
       })
       if (!upload.ok || !upload.item) throw new Error(upload.error || 'Unable to upload attachment.')
 
       const response = await callRpc(RPC_PEERCHAT_SEND, {
         roomKey: activeRoom.roomKey,
         message: upload.item.url,
-        fileName: upload.item.name,
-        fileSize: upload.item.byteLength ?? fileSize
+        fileName: asset.name,
+        fileSize: upload.item.byteLength ?? fileSize,
+        fileEnc: true
       })
       if (!response.ok) throw new Error(response.error || 'Unable to send attachment.')
       versionRef.current = -1
       await refreshRoom(true)
       if (soundsEnabled) playPeerChatSound(require('../../assets/sounds/peerchat/send.mp3'))
-      onStatus(`Sent ${upload.item.name}`)
+      onStatus(`Sent ${asset.name}`)
     })
   }
 
@@ -1639,7 +1644,10 @@ export function PeerChatScreen ({
                       colors={colors}
                       item={item}
                       onCallRpc={callRpc}
+                      onOpenLocalFile={onOpenLocalFile}
                       onOpenUrl={onOpenUrl}
+                      onStatus={onStatus}
+                      roomKey={activeRoom.roomKey}
                       onViewMedia={setMediaTarget}
                     />
                     )
@@ -2537,37 +2545,82 @@ function PeerChatAttachment ({
   colors,
   item,
   onCallRpc,
+  onOpenLocalFile,
   onOpenUrl,
+  onStatus,
+  roomKey,
   onViewMedia
 }: {
   colors: typeof lightColors
   item: PeerChatMessage
   onCallRpc: (command: number, data?: object) => Promise<PeerChatResponse>
+  onOpenLocalFile: (uri: string, name: string) => Promise<boolean>
   onOpenUrl: (url: string) => void
+  onStatus: (message: string) => void
+  roomKey: string
   onViewMedia: (target: PeerChatMediaTarget) => void
 }) {
   const mediaKind = getPeerChatAttachmentMediaKind(item.fileName || '', item.message)
   const canPreview = mediaKind !== null && Number.isFinite(item.fileSize) &&
     Number(item.fileSize) > 0 && Number(item.fileSize) <= AUTO_INLINE_MEDIA_MAX_BYTES
   const [mediaUrl, setMediaUrl] = useState<string | null>(null)
+  const [isOpening, setIsOpening] = useState(false)
 
   useEffect(() => {
     if (!canPreview || !mediaKind) return
     let cancelled = false
-    void onCallRpc(RPC_HYPER_FETCH, { url: item.message })
+    const command = item.fileEnc === true ? RPC_PEERCHAT_ATTACHMENT_OPEN : RPC_HYPER_FETCH
+    const request = item.fileEnc === true
+      ? {
+          roomKey,
+          url: item.message,
+          fileName: item.fileName,
+          fileSize: item.fileSize,
+          encrypted: true
+        }
+      : { url: item.message }
+    void onCallRpc(command, request)
       .then((response) => {
+        const resolvedMediaUrl = item.fileEnc === true ? response.localUri : response.mediaUrl
         if (
           !cancelled &&
           response.ok &&
-          response.mediaType === mediaKind &&
-          typeof response.mediaUrl === 'string'
-        ) setMediaUrl(response.mediaUrl)
+          typeof resolvedMediaUrl === 'string'
+        ) setMediaUrl(resolvedMediaUrl)
       })
       .catch(() => {})
     return () => {
       cancelled = true
     }
-  }, [canPreview, item.message, mediaKind, onCallRpc])
+  }, [canPreview, item.fileEnc, item.fileName, item.fileSize, item.message, mediaKind, onCallRpc, roomKey])
+
+  async function openAttachment () {
+    if (isOpening) return
+    if (item.fileEnc !== true) {
+      onOpenUrl(item.message)
+      return
+    }
+    setIsOpening(true)
+    try {
+      const response = await onCallRpc(RPC_PEERCHAT_ATTACHMENT_OPEN, {
+        roomKey,
+        url: item.message,
+        fileName: item.fileName,
+        fileSize: item.fileSize,
+        encrypted: true
+      })
+      if (!response.ok || !response.localUri) {
+        throw new Error(response.error || 'Unable to open encrypted attachment.')
+      }
+      if (!await onOpenLocalFile(response.localUri, item.fileName || 'PeerChat attachment')) {
+        throw new Error('No app is available to open this attachment.')
+      }
+    } catch (error) {
+      onStatus(error instanceof Error ? error.message : String(error))
+    } finally {
+      setIsOpening(false)
+    }
+  }
 
   if (mediaUrl && mediaKind === 'image') {
     return (
@@ -2610,11 +2663,12 @@ function PeerChatAttachment ({
     <Pressable
       accessibilityHint='Opens this Hyperdrive attachment'
       accessibilityRole='link'
-      onPress={() => onOpenUrl(item.message)}
+      disabled={isOpening}
+      onPress={() => void openAttachment()}
       style={[styles.attachmentCard, { backgroundColor: colors.input, borderColor: colors.muted }]}
     >
       <Text style={[styles.attachmentIcon, { color: colors.accent }]}>+</Text>
-      <AttachmentCaption colors={colors} item={item} />
+      <AttachmentCaption colors={colors} item={item} status={isOpening ? 'Opening...' : undefined} />
     </Pressable>
   )
 }
@@ -2752,16 +2806,18 @@ function PeerChatMediaViewer ({
 function AttachmentCaption ({
   colors,
   inline = false,
-  item
+  item,
+  status
 }: {
   colors: typeof lightColors
   inline?: boolean
   item: PeerChatMessage
+  status?: string
 }) {
   return (
     <View style={inline ? styles.inlineMediaCaption : styles.attachmentCopy}>
       <Text numberOfLines={1} style={[styles.attachmentName, { color: colors.text }]}>{item.fileName}</Text>
-      <Text style={[styles.attachmentMeta, { color: colors.muted }]}>{formatFileSize(item.fileSize)}</Text>
+      <Text style={[styles.attachmentMeta, { color: colors.muted }]}>{status || formatFileSize(item.fileSize)}</Text>
     </View>
   )
 }

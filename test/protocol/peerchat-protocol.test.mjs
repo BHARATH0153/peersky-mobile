@@ -94,10 +94,12 @@ test('PeerChat accepts only bounded Hyperdrive attachment metadata', () => {
   assert.deepEqual(normalizePeerChatAttachment({
     message: url,
     fileName: 'report.pdf',
-    fileSize: 1024
+    fileSize: 1024,
+    fileEnc: true
   }), {
     fileName: 'report.pdf',
-    fileSize: 1024
+    fileSize: 1024,
+    fileEnc: true
   })
   assert.equal(normalizePeerChatAttachment({
     message: 'https://example.com/report.pdf',
@@ -112,7 +114,8 @@ test('PeerChat accepts only bounded Hyperdrive attachment metadata', () => {
   assert.deepEqual(normalizePeerChatAttachment({
     message: url,
     fileName: `safe\u202E${'x'.repeat(220)}`,
-    fileSize: -1
+    fileSize: -1,
+    fileEnc: false
   }), {
     fileName: `safe${'x'.repeat(196)}`
   })

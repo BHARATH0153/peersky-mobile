@@ -2773,6 +2773,7 @@ export default function App () {
                   notificationsEnabled={peerChatNotifications.notificationsEnabled}
                   onCallRpc={(command, data = {}) => callRpc(command, data) as Promise<PeerChatResponse>}
                   onNotificationsEnabledChange={peerChatNotifications.setNotificationsEnabled}
+                  onOpenLocalFile={openBrowserLocalFile}
                   onOpenUrl={(targetUrl) => void loadBrowserUrl(targetUrl)}
                   onSoundsEnabledChange={peerChatNotifications.setSoundsEnabled}
                   onStatus={setStatus}

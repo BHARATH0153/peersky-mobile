@@ -137,7 +137,7 @@ export function normalizePeerChatReaction (value) {
   }
 }
 
-export function normalizePeerChatAttachment ({ message, fileName, fileSize } = {}) {
+export function normalizePeerChatAttachment ({ message, fileName, fileSize, fileEnc } = {}) {
   if (!isHyperUrl(message) || typeof fileName !== 'string') return null
 
   const name = Array.from(stripMetadataControls(fileName).trim())
@@ -148,7 +148,8 @@ export function normalizePeerChatAttachment ({ message, fileName, fileSize } = {
   const size = Number.isSafeInteger(fileSize) && fileSize >= 0 ? fileSize : null
   return {
     fileName: name,
-    ...(size !== null && { fileSize: size })
+    ...(size !== null && { fileSize: size }),
+    ...(fileEnc === true && { fileEnc: true })
   }
 }
 

@@ -103,12 +103,13 @@ separate and does not clear PeerChat or other P2P data.
 
 ## Identity transfer
 
-PeerSky Mobile can restore supported identity data sent by PeerSky Desktop, but
-the current transfer does not migrate the mobile-specific
-`peerchat-mobile.json` state into a new device. Keep important room keys
-separately and rejoin those rooms after moving devices. This limitation avoids
-claiming safe migration between desktop and mobile state formats before room-key
-protection and conflict behavior have been designed and tested end to end.
+PeerSky Mobile can restore supported identity data sent by PeerSky Desktop.
+Restoring another desktop identity preserves the phone's device key, local
+PeerChat profile, rooms, message feeds, preferences, and attachment cache. This
+keeps one stable mobile PeerChat identity when the same phone is linked to more
+than one desktop. The desktop PeerChat state format is not imported into the
+mobile state; rooms already present only on the desktop must still be joined on
+mobile with their room keys.
 
 ## Resource limits
 

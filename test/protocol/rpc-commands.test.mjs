@@ -12,6 +12,8 @@ import {
   RPC_HYPER_STORAGE_DELETE_APP,
   RPC_HYPER_STORAGE_LIST,
   RPC_PEERCHAT_INIT,
+  RPC_PEERCHAT_ATTACHMENT_OPEN,
+  RPC_PEERCHAT_ATTACHMENT_UPLOAD,
   RPC_PEERCHAT_DM_ACCEPT,
   RPC_PEERCHAT_DM_CREATE,
   RPC_PEERCHAT_DM_REJECT,
@@ -26,7 +28,8 @@ import {
   RPC_PEERCHAT_SET_ACTIVE,
   RPC_PEERCHAT_ROOM_PIN,
   RPC_PEERCHAT_ROOM_MUTE,
-  RPC_PEERCHAT_ROOM_UPDATE
+  RPC_PEERCHAT_ROOM_UPDATE,
+  RPC_PEERCHAT_ONBOARD
 } from '../../backend/rpc/commands.mjs'
 
 test('Hyper storage and LAN discovery use distinct RPC command IDs', () => {
@@ -64,9 +67,12 @@ test('PeerChat RPC commands use a dedicated command range', () => {
     RPC_PEERCHAT_ROOM_UPDATE,
     RPC_PEERCHAT_DM_CREATE,
     RPC_PEERCHAT_DM_ACCEPT,
-    RPC_PEERCHAT_DM_REJECT
+    RPC_PEERCHAT_DM_REJECT,
+    RPC_PEERCHAT_ONBOARD,
+    RPC_PEERCHAT_ATTACHMENT_UPLOAD,
+    RPC_PEERCHAT_ATTACHMENT_OPEN
   ]
 
-  assert.deepEqual(commands, [40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55])
+  assert.deepEqual(commands, [40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58])
   assert.equal(new Set(commands).size, commands.length)
 })
