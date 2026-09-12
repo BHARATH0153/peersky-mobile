@@ -7,6 +7,7 @@ import {
   MAX_PEERCHAT_NOTIFICATIONS_PER_POLL,
   parsePeerChatNotificationPreferences,
   serializePeerChatNotificationPreferences,
+  shouldEnablePeerChatBackground,
   shouldHandlePeerChatNotificationInApp
 } from '../../app/peerchat/notification-state.mjs'
 
@@ -21,6 +22,17 @@ test('PeerChat notification preferences round-trip and fail safely', () => {
     notifications: false,
     sounds: true
   })
+})
+
+test('PeerChat notifications default on while preserving explicit saved choices', () => {
+  assert.deepEqual(DEFAULT_PEERCHAT_NOTIFICATION_PREFERENCES, {
+    notifications: true,
+    sounds: true
+  })
+  assert.deepEqual(
+    parsePeerChatNotificationPreferences(serializePeerChatNotificationPreferences({ notifications: false, sounds: true })),
+    { notifications: false, sounds: true }
+  )
 })
 
 test('PeerChat emits bounded notifications only for new unread unmuted messages', () => {
@@ -61,4 +73,11 @@ test('PeerChat handles notifications in-app only while its screen is foreground-
   assert.equal(shouldHandlePeerChatNotificationInApp(true, 'background'), false)
   assert.equal(shouldHandlePeerChatNotificationInApp(true, 'inactive'), false)
   assert.equal(shouldHandlePeerChatNotificationInApp(false, 'active'), false)
+})
+
+test('PeerChat background service runs only for enabled runtimes with joined rooms', () => {
+  assert.equal(shouldEnablePeerChatBackground({ isRuntimeReady: true, notificationsEnabled: true, roomCount: 1 }), true)
+  assert.equal(shouldEnablePeerChatBackground({ isRuntimeReady: true, notificationsEnabled: true, roomCount: 0 }), false)
+  assert.equal(shouldEnablePeerChatBackground({ isRuntimeReady: true, notificationsEnabled: false, roomCount: 1 }), false)
+  assert.equal(shouldEnablePeerChatBackground({ isRuntimeReady: false, notificationsEnabled: true, roomCount: 1 }), false)
 })

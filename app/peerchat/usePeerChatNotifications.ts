@@ -9,6 +9,7 @@ import {
   parsePeerChatNotificationPreferences,
   PEERCHAT_NOTIFICATION_PREFERENCES_MAX_BYTES,
   serializePeerChatNotificationPreferences,
+  shouldEnablePeerChatBackground,
   shouldHandlePeerChatNotificationInApp
 } from './notification-state.mjs'
 import {
@@ -67,6 +68,7 @@ export function usePeerChatNotifications ({
   })
   const [isReady, setIsReady] = useState(false)
   const [unreadTotal, setUnreadTotal] = useState(0)
+  const [roomCount, setRoomCount] = useState(0)
   const callRpcRef = useRef(onCallRpc)
   const openRoomRef = useRef(onOpenRoom)
   const isPeerChatVisibleRef = useRef(isPeerChatVisible)
@@ -113,7 +115,14 @@ export function usePeerChatNotifications ({
   }, [])
 
   const setNotificationsEnabled = useCallback(async (enabled: boolean) => {
-    if (enabled && !await requestPeerChatNotificationPermission()) return false
+    if (enabled && !await requestPeerChatNotificationPermission()) {
+      const deniedPreferences = { ...preferencesRef.current, notifications: false }
+      if (persistPreferences(deniedPreferences)) {
+        preferencesRef.current = deniedPreferences
+        setPreferences(deniedPreferences)
+      }
+      return false
+    }
     const nextPreferences = { ...preferencesRef.current, notifications: enabled }
     if (!persistPreferences(nextPreferences)) return false
     preferencesRef.current = nextPreferences
@@ -131,15 +140,20 @@ export function usePeerChatNotifications ({
 
   useEffect(() => {
     if (!isReady) return
-    void setPeerChatBackgroundEnabled(isRuntimeReady && preferences.notifications).catch((error) => {
+    void setPeerChatBackgroundEnabled(shouldEnablePeerChatBackground({
+      isRuntimeReady,
+      notificationsEnabled: preferences.notifications,
+      roomCount
+    })).catch((error) => {
       console.warn('Unable to update PeerChat background service:', error)
     })
-  }, [isReady, isRuntimeReady, preferences.notifications])
+  }, [isReady, isRuntimeReady, preferences.notifications, roomCount])
 
   useEffect(() => {
     if (!isReady || isRuntimeReady) return
     previousRoomsRef.current = null
     badgeCountRef.current = 0
+    setRoomCount(0)
     setUnreadTotal(0)
     void setPeerChatBadgeCount(0).catch((error) => {
       if (!badgeWarningRef.current) {
@@ -168,6 +182,7 @@ export function usePeerChatNotifications ({
         if (cancelled) return
 
         const nextRooms = Array.isArray(response.rooms) ? response.rooms : []
+        setRoomCount(nextRooms.length)
         const nextUnreadTotal = normalizeUnreadTotal(response.unreadTotal, nextRooms)
         setUnreadTotal(nextUnreadTotal)
         if (badgeCountRef.current !== nextUnreadTotal) {

@@ -3,7 +3,7 @@ export const PEERCHAT_NOTIFICATION_PREFERENCES_MAX_BYTES = 256
 export const MAX_PEERCHAT_NOTIFICATIONS_PER_POLL = 3
 
 export const DEFAULT_PEERCHAT_NOTIFICATION_PREFERENCES = Object.freeze({
-  notifications: false,
+  notifications: true,
   sounds: true
 })
 
@@ -59,6 +59,13 @@ export function collectPeerChatNotificationCandidates (previousRooms, nextRooms)
 
 export function shouldHandlePeerChatNotificationInApp (isPeerChatVisible, appState) {
   return isPeerChatVisible === true && appState === 'active'
+}
+
+export function shouldEnablePeerChatBackground ({ isRuntimeReady, notificationsEnabled, roomCount }) {
+  return isRuntimeReady === true &&
+    notificationsEnabled === true &&
+    Number.isSafeInteger(roomCount) &&
+    roomCount > 0
 }
 
 function truncateText (value, maximum) {

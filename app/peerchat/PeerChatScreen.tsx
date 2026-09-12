@@ -1190,7 +1190,10 @@ export function PeerChatScreen ({
       setProfileAvatar(response.profile.avatar || null)
       setLinkPreviewsEnabled(response.profile.linkPreview !== false)
       setRooms(response.rooms)
-      onStatus('PeerChat profile created')
+      const notificationsAllowed = await onNotificationsEnabledChange(true)
+      onStatus(notificationsAllowed
+        ? 'PeerChat profile created and notifications enabled'
+        : 'PeerChat profile created; notifications remain disabled')
     })
   }
 
