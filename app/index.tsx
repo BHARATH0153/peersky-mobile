@@ -348,9 +348,14 @@ export default function App () {
   const [browserWebCanGoForward, setBrowserWebCanGoForward] = useState(false)
   const [browserIsLoading, setBrowserIsLoading] = useState(false)
   const [activeTab, setActiveTab] = useState<RuntimeTab>('hyper')
+  const [requestedPeerChatRoomKey, setRequestedPeerChatRoomKey] = useState<string | null>(null)
   const peerChatNotifications = usePeerChatNotifications({
     isPeerChatVisible: browserSource.kind === 'app' && activeTab === 'peerchat',
     isRuntimeReady: Boolean(identityStoragePath),
+    onOpenRoom: (roomKey) => {
+      setRequestedPeerChatRoomKey(roomKey)
+      void loadBrowserUrl('peersky://p2p/peerchat/')
+    },
     onCallRpc: (command, data = {}) => callRpc(command, data) as Promise<PeerChatResponse>
   })
   const [lastResult, setLastResult] = useState<RpcResponse | null>(null)
@@ -2774,9 +2779,11 @@ export default function App () {
                   onCallRpc={(command, data = {}) => callRpc(command, data) as Promise<PeerChatResponse>}
                   onNotificationsEnabledChange={peerChatNotifications.setNotificationsEnabled}
                   onOpenLocalFile={openBrowserLocalFile}
+                  onRequestedRoomHandled={() => setRequestedPeerChatRoomKey(null)}
                   onOpenUrl={(targetUrl) => void loadBrowserUrl(targetUrl)}
                   onSoundsEnabledChange={peerChatNotifications.setSoundsEnabled}
                   onStatus={setStatus}
+                  requestedRoomKey={requestedPeerChatRoomKey}
                   soundsEnabled={peerChatNotifications.soundsEnabled}
                 />
                 )

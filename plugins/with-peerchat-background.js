@@ -50,6 +50,18 @@ module.exports = function withPeerChatBackground (config) {
         .replaceAll('__PACKAGE_NAME__', packageName)
       fs.writeFileSync(path.join(sourceDirectory, filename), source)
     }
+
+    const rawDirectory = path.join(androidConfig.modRequest.platformProjectRoot, 'app/src/main/res/raw')
+    fs.mkdirSync(rawDirectory, { recursive: true })
+    for (const [sourceName, targetName] of [
+      ['send.mp3', 'peerchat_send.mp3'],
+      ['receive.mp3', 'peerchat_receive.mp3']
+    ]) {
+      fs.copyFileSync(
+        path.join(__dirname, '..', 'assets/sounds/peerchat', sourceName),
+        path.join(rawDirectory, targetName)
+      )
+    }
     return androidConfig
   }])
 }

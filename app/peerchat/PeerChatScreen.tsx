@@ -42,7 +42,6 @@ import {
   formatPeerChatDateLabel,
   formatPeerChatMessageDetails,
   getFirstUnreadMessageIndex,
-  isPeerChatNearBottom,
   PEERCHAT_SEARCH_QUERY_MAX_CHARACTERS
 } from './message-search.mjs'
 import { normalizePeerChatMentionSpacing, splitPeerChatMentions } from './message-text.mjs'
@@ -220,10 +219,12 @@ type PeerChatScreenProps = {
   onCallRpc: (command: number, data?: object) => Promise<PeerChatResponse>
   onNotificationsEnabledChange: (enabled: boolean) => Promise<boolean>
   onOpenLocalFile: (uri: string, name: string) => Promise<boolean>
+  onRequestedRoomHandled: () => void
   onOpenUrl: (url: string) => void
   onSoundsEnabledChange: (enabled: boolean) => boolean
   onStatus: (message: string) => void
   soundsEnabled: boolean
+  requestedRoomKey: string | null
 }
 
 const POLL_INTERVAL_MS = 1500
@@ -263,10 +264,12 @@ export function PeerChatScreen ({
   onCallRpc,
   onNotificationsEnabledChange,
   onOpenLocalFile,
+  onRequestedRoomHandled,
   onOpenUrl,
   onSoundsEnabledChange,
   onStatus,
-  soundsEnabled
+  soundsEnabled,
+  requestedRoomKey
 }: PeerChatScreenProps) {
   const colors = isDark ? darkColors : lightColors
   const callRpcRef = useRef(onCallRpc)
@@ -278,8 +281,8 @@ export function PeerChatScreen ({
   const actionInFlightRef = useRef(false)
   const unreadScrollPendingRef = useRef(false)
   const isNearMessageBottomRef = useRef(true)
-  const openingMessageScrollRef = useRef(false)
-  const openingMessageScrollTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const observedMessageIdsRef = useRef<Set<string> | null>(null)
+  const roomOpenedAtRef = useRef(0)
   const mountedRef = useRef(true)
   const composerRoomKeyRef = useRef<string | null>(null)
   const uiStateRef = useRef<PeerChatUiState>(EMPTY_UI_STATE)
@@ -338,8 +341,17 @@ export function PeerChatScreen ({
     messages,
     profile?.id || ''
   )
-  const visibleMessages = filterPeerChatMessages(messages, isSearching ? searchQuery : '') as PeerChatMessage[]
-  const firstUnreadIndex = isSearching ? -1 : getFirstUnreadMessageIndex(visibleMessages, newMessagesAfter)
+  const visibleMessages = useMemo(
+    () => filterPeerChatMessages(messages, isSearching ? searchQuery : '') as PeerChatMessage[],
+    [isSearching, messages, searchQuery]
+  )
+  const displayedMessages = useMemo(() => [...visibleMessages].reverse(), [visibleMessages])
+  const firstUnreadMessageId = isSearching
+    ? null
+    : visibleMessages[getFirstUnreadMessageIndex(visibleMessages, newMessagesAfter)]?.id || null
+  const firstUnreadIndex = firstUnreadMessageId
+    ? displayedMessages.findIndex((message) => message.id === firstUnreadMessageId)
+    : -1
   const visibleRooms = filterPeerChatRooms(rooms, roomSearchQuery) as PeerChatRoom[]
   const visibleMembers = filterPeerChatMembers(
     activeRoom?.members || [],
@@ -405,7 +417,6 @@ export function PeerChatScreen ({
     return () => {
       if (uiStateRestoredRef.current) persistPeerChatUiState(uiStateRef.current)
       void callRpcRef.current(RPC_PEERCHAT_SET_ACTIVE, { roomKey: null }).catch(() => {})
-      if (openingMessageScrollTimerRef.current) clearTimeout(openingMessageScrollTimerRef.current)
       mountedRef.current = false
       activeRoomRef.current = null
     }
@@ -455,6 +466,9 @@ export function PeerChatScreen ({
       if (state !== 'active' && uiStateRestoredRef.current) {
         persistPeerChatUiState(uiStateRef.current)
       }
+      void callRpcRef.current(RPC_PEERCHAT_SET_ACTIVE, {
+        roomKey: state === 'active' ? activeRoomRef.current?.roomKey || null : null
+      }).catch(() => {})
     })
     return () => subscription.remove()
   }, [])
@@ -469,6 +483,13 @@ export function PeerChatScreen ({
     })
     return () => subscription.remove()
   }, [activeRoom])
+
+  useEffect(() => {
+    if (!requestedRoomKey || !isInitialized) return
+    const room = rooms.find((item) => item.roomKey === requestedRoomKey)
+    if (room) openRoom(room)
+    onRequestedRoomHandled()
+  }, [isInitialized, onRequestedRoomHandled, requestedRoomKey, rooms])
 
   useEffect(() => {
     let cancelled = false
@@ -515,6 +536,8 @@ export function PeerChatScreen ({
     setComposer(draftRoomKey ? restoredUiState.draft : '')
     if (restoredRoom) {
       versionRef.current = -1
+      observedMessageIdsRef.current = null
+      roomOpenedAtRef.current = Date.now()
       setMessages([])
       captureUnreadBoundary()
       setActiveRoom(restoredRoom)
@@ -543,6 +566,19 @@ export function PeerChatScreen ({
       if (response.room) setActiveRoom(response.room)
       if (response.rooms) setRooms(response.rooms)
       if (Array.isArray(response.messages)) {
+        const previousIds = observedMessageIdsRef.current
+        if (previousIds && soundsEnabled) {
+          const hasNewRemoteMessage = response.messages.some((message) => (
+            !message.self &&
+            !message.system &&
+            !previousIds.has(message.id) &&
+            message.timestamp >= roomOpenedAtRef.current
+          ))
+          if (hasNewRemoteMessage) {
+            playPeerChatSound('receive', require('../../assets/sounds/peerchat/receive.mp3'))
+          }
+        }
+        observedMessageIdsRef.current = new Set(response.messages.map((message) => message.id))
         setMessages(response.messages)
       }
       if (Number.isSafeInteger(response.version)) versionRef.current = response.version as number
@@ -554,7 +590,7 @@ export function PeerChatScreen ({
     } finally {
       pollInFlightRef.current = false
     }
-  }, [callRpc])
+  }, [callRpc, soundsEnabled])
 
   useEffect(() => {
     if (!activeRoom) return
@@ -763,6 +799,8 @@ export function PeerChatScreen ({
     if (composerRoomKeyRef.current !== room.roomKey) setComposer('')
     composerRoomKeyRef.current = room.roomKey
     versionRef.current = -1
+    observedMessageIdsRef.current = null
+    roomOpenedAtRef.current = Date.now()
     setMessages([])
     setReplyTarget(null)
     setIsSearching(false)
@@ -793,8 +831,6 @@ export function PeerChatScreen ({
   function captureUnreadBoundary () {
     unreadScrollPendingRef.current = false
     isNearMessageBottomRef.current = true
-    openingMessageScrollRef.current = true
-    if (openingMessageScrollTimerRef.current) clearTimeout(openingMessageScrollTimerRef.current)
     setShowScrollToLatest(false)
     setNewMessagesAfter(null)
   }
@@ -1002,7 +1038,7 @@ export function PeerChatScreen ({
       }
       versionRef.current = -1
       await refreshRoom(true)
-      if (soundsEnabled) playPeerChatSound(require('../../assets/sounds/peerchat/send.mp3'))
+      if (soundsEnabled) playPeerChatSound('send', require('../../assets/sounds/peerchat/send.mp3'))
       onStatus('PeerChat message sent')
     })
   }
@@ -1040,7 +1076,7 @@ export function PeerChatScreen ({
       if (!response.ok) throw new Error(response.error || 'Unable to send attachment.')
       versionRef.current = -1
       await refreshRoom(true)
-      if (soundsEnabled) playPeerChatSound(require('../../assets/sounds/peerchat/send.mp3'))
+      if (soundsEnabled) playPeerChatSound('send', require('../../assets/sounds/peerchat/send.mp3'))
       onStatus(`Sent ${asset.name}`)
     })
   }
@@ -1288,7 +1324,11 @@ export function PeerChatScreen ({
           >
             {activeRoom.avatar
               ? <Image source={{ uri: activeRoom.avatar }} style={styles.chatHeaderAvatar} />
-              : null}
+              : (
+                <View style={[styles.chatHeaderAvatar, styles.chatHeaderAvatarFallback, { backgroundColor: colors.accentSoft }]}>
+                  <Text style={[styles.chatHeaderAvatarText, { color: colors.accent }]}>{getRoomInitials(activeRoom.name)}</Text>
+                </View>
+                )}
             <View style={styles.chatHeaderText}>
               <Text numberOfLines={1} style={[styles.chatTitle, { color: colors.text }]}>{activeRoom.name}</Text>
               <Text style={[
@@ -1541,9 +1581,10 @@ export function PeerChatScreen ({
         <View style={styles.messageListContainer}>
           <FlatList
           ref={messageListRef}
-          data={visibleMessages}
+          data={displayedMessages}
+          inverted
           keyExtractor={(item) => item.id}
-          contentContainerStyle={visibleMessages.length > 0 ? styles.messageList : styles.emptyMessageList}
+          contentContainerStyle={displayedMessages.length > 0 ? styles.messageList : styles.emptyMessageList}
           onContentSizeChange={() => {
             if (isSearching) return
             if (unreadScrollPendingRef.current && firstUnreadIndex >= 0) {
@@ -1551,32 +1592,16 @@ export function PeerChatScreen ({
               isNearMessageBottomRef.current = false
               setShowScrollToLatest(true)
               messageListRef.current?.scrollToIndex({ animated: false, index: firstUnreadIndex, viewPosition: 0 })
-            } else if (openingMessageScrollRef.current) {
-              messageListRef.current?.scrollToEnd({ animated: false })
-              if (openingMessageScrollTimerRef.current) clearTimeout(openingMessageScrollTimerRef.current)
-              openingMessageScrollTimerRef.current = setTimeout(() => {
-                openingMessageScrollRef.current = false
-                openingMessageScrollTimerRef.current = null
-              }, 300)
             } else if (isNearMessageBottomRef.current) {
-              messageListRef.current?.scrollToEnd({ animated: false })
+              messageListRef.current?.scrollToOffset({ animated: false, offset: 0 })
             }
           }}
           onScroll={({ nativeEvent }) => {
-            if (isSearching || unreadScrollPendingRef.current || openingMessageScrollRef.current) return
-            const nearBottom = isPeerChatNearBottom({
-              contentHeight: nativeEvent.contentSize.height,
-              viewportHeight: nativeEvent.layoutMeasurement.height,
-              offsetY: nativeEvent.contentOffset.y
-            })
+            if (isSearching || unreadScrollPendingRef.current) return
+            const nearBottom = nativeEvent.contentOffset.y <= 80
             if (nearBottom === isNearMessageBottomRef.current) return
             isNearMessageBottomRef.current = nearBottom
             setShowScrollToLatest(!nearBottom)
-          }}
-          onScrollBeginDrag={() => {
-            openingMessageScrollRef.current = false
-            if (openingMessageScrollTimerRef.current) clearTimeout(openingMessageScrollTimerRef.current)
-            openingMessageScrollTimerRef.current = null
           }}
           scrollEventThrottle={100}
           onScrollToIndexFailed={({ averageItemLength, index }) => {
@@ -1587,9 +1612,12 @@ export function PeerChatScreen ({
           }}
           renderItem={({ item, index }) => {
             const dateLabel = formatPeerChatDateLabel(item.timestamp)
-            const previousDateLabel = index > 0
-              ? formatPeerChatDateLabel(visibleMessages[index - 1].timestamp)
+            const previousDateLabel = index < displayedMessages.length - 1
+              ? formatPeerChatDateLabel(displayedMessages[index + 1].timestamp)
               : ''
+            const senderMember = !item.self && !item.system
+              ? activeRoom.members.find((member) => member.id === item.sender)
+              : null
             return (
               <>
               {index === firstUnreadIndex && (
@@ -1625,7 +1653,16 @@ export function PeerChatScreen ({
                     hitSlop={4}
                     onPress={() => openMessageSenderProfile(item)}
                   >
-                    <Text style={[styles.senderName, { color: colors.accent }]}>{item.senderName}</Text>
+                    <View style={styles.messageSenderRow}>
+                      {senderMember?.avatar
+                        ? <Image source={{ uri: senderMember.avatar }} style={styles.messageSenderAvatar} />
+                        : (
+                          <View style={[styles.messageSenderAvatarFallback, { backgroundColor: colors.accentSoft }]}>
+                            <Text style={[styles.messageSenderAvatarText, { color: colors.accent }]}>{getRoomInitials(item.senderName)}</Text>
+                          </View>
+                          )}
+                      <Text style={[styles.senderName, { color: colors.accent }]}>{item.senderName}</Text>
+                    </View>
                   </Pressable>
                 )}
                 {item.replyTo && (
@@ -1732,7 +1769,7 @@ export function PeerChatScreen ({
               onPress={() => {
                 isNearMessageBottomRef.current = true
                 setShowScrollToLatest(false)
-                messageListRef.current?.scrollToEnd({ animated: true })
+                messageListRef.current?.scrollToOffset({ animated: true, offset: 0 })
               }}
               style={[styles.scrollToLatest, { backgroundColor: colors.accent }]}
             >
@@ -2037,7 +2074,7 @@ export function PeerChatScreen ({
             visible={showPeerChatSettings}
           >
             <KeyboardAvoidingView
-              behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+              behavior='padding'
               style={styles.roomInfoModalRoot}
             >
               <Pressable
@@ -3042,6 +3079,8 @@ const styles = StyleSheet.create({
   chatHeader: { alignItems: 'center', borderBottomWidth: 1, flexDirection: 'row', minHeight: 62, paddingHorizontal: 8 },
   chatHeaderCopy: { alignItems: 'center', flex: 1, flexDirection: 'row', gap: 7, paddingHorizontal: 5 },
   chatHeaderAvatar: { borderRadius: 17, height: 34, width: 34 },
+  chatHeaderAvatarFallback: { alignItems: 'center', justifyContent: 'center' },
+  chatHeaderAvatarText: { fontSize: 11, fontWeight: '900' },
   chatHeaderText: { alignItems: 'center', flex: 1 },
   chatHeaderActions: { flexDirection: 'row' },
   roomInfoModalRoot: { flex: 1, justifyContent: 'center', paddingHorizontal: 18 },
@@ -3097,6 +3136,10 @@ const styles = StyleSheet.create({
   dateDividerText: { fontSize: 11, fontWeight: '600' },
   messageRow: { alignItems: 'flex-start', marginBottom: 9 },
   messageRowSelf: { alignItems: 'flex-end' },
+  messageSenderRow: { alignItems: 'center', flexDirection: 'row', gap: 6, marginBottom: 3 },
+  messageSenderAvatar: { borderRadius: 9, height: 18, width: 18 },
+  messageSenderAvatarFallback: { alignItems: 'center', borderRadius: 9, height: 18, justifyContent: 'center', width: 18 },
+  messageSenderAvatarText: { fontSize: 7, fontWeight: '900' },
   systemMessageRow: { alignItems: 'center' },
   messageBubble: { borderRadius: 15, maxWidth: '84%', minWidth: 84, paddingHorizontal: 12, paddingVertical: 8 },
   systemMessage: { maxWidth: '92%' },
@@ -3107,7 +3150,7 @@ const styles = StyleSheet.create({
   reactionRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 4, marginTop: 6 },
   reactionBubble: { borderRadius: 12, borderWidth: 1, paddingHorizontal: 7, paddingVertical: 2 },
   reactionText: { fontSize: 12 },
-  senderName: { fontSize: 11, fontWeight: '800', marginBottom: 3 },
+  senderName: { fontSize: 11, fontWeight: '800' },
   messageText: { fontSize: 14, lineHeight: 19 },
   attachmentCard: { alignItems: 'center', borderRadius: 10, borderWidth: 1, flexDirection: 'row', gap: 9, minWidth: 190, padding: 9 },
   inlineMediaCard: { borderRadius: 10, borderWidth: 1, maxWidth: 260, overflow: 'hidden', width: 240 },

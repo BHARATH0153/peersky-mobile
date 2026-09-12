@@ -107,3 +107,24 @@ export async function presentPeerChatNotification ({
 export async function setPeerChatBadgeCount (count: number) {
   return Notifications.setBadgeCountAsync(Math.max(0, Math.trunc(count)))
 }
+
+export function addPeerChatNotificationResponseListener (listener: (roomKey: string) => void) {
+  let handledIdentifier = ''
+  const handleResponse = (response: Notifications.NotificationResponse | null) => {
+    const identifier = response?.notification.request.identifier
+    if (!identifier || identifier === handledIdentifier) return
+    const roomKey = response?.notification.request.content.data?.roomKey
+    if (typeof roomKey !== 'string' || !/^[a-f0-9]{64}$/i.test(roomKey)) return
+    handledIdentifier = identifier
+    listener(roomKey.toLowerCase())
+    Notifications.clearLastNotificationResponse()
+  }
+
+  const subscription = Notifications.addNotificationResponseReceivedListener(handleResponse)
+  void Notifications.getLastNotificationResponseAsync()
+    .then((response) => {
+      handleResponse(response)
+    })
+    .catch(() => {})
+  return subscription
+}

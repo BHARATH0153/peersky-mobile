@@ -870,6 +870,13 @@ export class PeerChatService {
       if (bio !== peer.bio || avatar !== peer.avatar) {
         peer.bio = bio
         peer.avatar = avatar
+        for (const room of this.rooms.values()) {
+          if (room.isDM && room.dmWith === peer.id) {
+            room.bio = bio
+            room.avatar = avatar
+          }
+        }
+        this.schedulePersist()
         this.bumpVersion()
       }
       return
@@ -972,6 +979,8 @@ export class PeerChatService {
     if (message.type === 'join') {
       if (!this.consumeControlRate(peer)) return
       if (message.username) peer.username = normalizePeerChatProfileName(message.username) || peer.username
+      if (Object.hasOwn(message, 'bio')) peer.bio = normalizePeerChatBio(message.bio)
+      if (Object.hasOwn(message, 'avatar')) peer.avatar = normalizePeerChatAvatar(message.avatar)
       this.sendRoomMeta(peer, roomKey)
       await this.syncHistoryToPeerOnce(peer, roomKey)
       this.bumpVersion()
@@ -987,17 +996,6 @@ export class PeerChatService {
         if (peer.initialSyncCount >= MAX_INITIAL_SYNC_MESSAGES_PER_CONNECTION) return
         peer.initialSyncCount += 1
       } else if (!this.consumeLiveRate(peer)) {
-        return
-      }
-
-      const room = this.rooms.get(roomKey)
-      if (
-        isSyncReaction &&
-        !room.isHost &&
-        room.joinedAt &&
-        Number.isFinite(message.ts) &&
-        message.ts < room.joinedAt
-      ) {
         return
       }
 
@@ -1020,15 +1018,6 @@ export class PeerChatService {
     }
 
     const room = this.rooms.get(roomKey)
-    if (
-      isSync &&
-      !room.isHost &&
-      room.joinedAt &&
-      Number.isFinite(message.ts) &&
-      message.ts < room.joinedAt
-    ) {
-      return
-    }
 
     if (typeof message.id !== 'string' || message.id.length > 128 || !this.trackMessageId(message.id)) return
 

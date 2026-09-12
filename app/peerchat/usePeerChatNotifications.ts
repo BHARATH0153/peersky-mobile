@@ -8,17 +8,19 @@ import {
   DEFAULT_PEERCHAT_NOTIFICATION_PREFERENCES,
   parsePeerChatNotificationPreferences,
   PEERCHAT_NOTIFICATION_PREFERENCES_MAX_BYTES,
-  serializePeerChatNotificationPreferences
+  serializePeerChatNotificationPreferences,
+  shouldHandlePeerChatNotificationInApp
 } from './notification-state.mjs'
 import {
   hasPeerChatNotificationPermission,
+  addPeerChatNotificationResponseListener,
   presentPeerChatNotification,
   preparePeerChatNotifications,
   requestPeerChatNotificationPermission,
   setPeerChatBadgeCount
 } from './notifications'
 import { playPeerChatSound } from './sounds'
-import { setPeerChatBackgroundEnabled } from './background-service'
+import { addPeerChatBackgroundTickListener, setPeerChatBackgroundEnabled } from './background-service'
 
 type NotificationRoom = {
   roomKey: string
@@ -52,10 +54,12 @@ const RECEIVE_SOUND = require('../../assets/sounds/peerchat/receive.mp3')
 export function usePeerChatNotifications ({
   isPeerChatVisible,
   isRuntimeReady,
+  onOpenRoom,
   onCallRpc
 }: {
   isPeerChatVisible: boolean
   isRuntimeReady: boolean
+  onOpenRoom: (roomKey: string) => void
   onCallRpc: (command: number, data?: object) => Promise<NotificationRpcResponse>
 }) {
   const [preferences, setPreferences] = useState<NotificationPreferences>({
@@ -64,6 +68,7 @@ export function usePeerChatNotifications ({
   const [isReady, setIsReady] = useState(false)
   const [unreadTotal, setUnreadTotal] = useState(0)
   const callRpcRef = useRef(onCallRpc)
+  const openRoomRef = useRef(onOpenRoom)
   const isPeerChatVisibleRef = useRef(isPeerChatVisible)
   const preferencesRef = useRef(preferences)
   const previousRoomsRef = useRef<NotificationRoom[] | null>(null)
@@ -73,8 +78,14 @@ export function usePeerChatNotifications ({
   const badgeWarningRef = useRef(false)
 
   callRpcRef.current = onCallRpc
+  openRoomRef.current = onOpenRoom
   isPeerChatVisibleRef.current = isPeerChatVisible
   preferencesRef.current = preferences
+
+  useEffect(() => {
+    const subscription = addPeerChatNotificationResponseListener((roomKey) => openRoomRef.current(roomKey))
+    return () => subscription.remove()
+  }, [])
 
   useEffect(() => {
     try {
@@ -177,8 +188,11 @@ export function usePeerChatNotifications ({
         if (!previousRooms) return
         const candidates = collectPeerChatNotificationCandidates(previousRooms, nextRooms)
         if (candidates.length === 0) return
-        if (isPeerChatVisibleRef.current) {
-          if (preferencesRef.current.sounds) playPeerChatSound(RECEIVE_SOUND)
+        if (shouldHandlePeerChatNotificationInApp(
+          isPeerChatVisibleRef.current,
+          AppState.currentState
+        )) {
+          if (preferencesRef.current.sounds) playPeerChatSound('receive', RECEIVE_SOUND)
           return
         }
         if (!preferencesRef.current.notifications || !await hasPeerChatNotificationPermission()) return
@@ -209,6 +223,9 @@ export function usePeerChatNotifications ({
     const subscription = AppState.addEventListener('change', (state) => {
       if (state === 'active') void poll()
     })
+    const backgroundTickSubscription = addPeerChatBackgroundTickListener(() => {
+      if (preferencesRef.current.notifications) void poll()
+    })
 
     void preparePeerChatNotifications().catch((error) => {
       console.warn('Unable to prepare PeerChat notifications:', error)
@@ -219,6 +236,7 @@ export function usePeerChatNotifications ({
       cancelled = true
       if (timer) clearTimeout(timer)
       subscription.remove()
+      backgroundTickSubscription.remove()
     }
   }, [isReady, isRuntimeReady])
 

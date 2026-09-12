@@ -6,7 +6,8 @@ import {
   DEFAULT_PEERCHAT_NOTIFICATION_PREFERENCES,
   MAX_PEERCHAT_NOTIFICATIONS_PER_POLL,
   parsePeerChatNotificationPreferences,
-  serializePeerChatNotificationPreferences
+  serializePeerChatNotificationPreferences,
+  shouldHandlePeerChatNotificationInApp
 } from '../../app/peerchat/notification-state.mjs'
 
 test('PeerChat notification preferences round-trip and fail safely', () => {
@@ -53,4 +54,11 @@ test('PeerChat notification text is sanitized and bounded', () => {
   assert.equal(Array.from(candidate.title).length, 80)
   assert.equal(Array.from(candidate.body).length, 180)
   assert.equal(candidate.title.includes('\u0000'), false)
+})
+
+test('PeerChat handles notifications in-app only while its screen is foreground-active', () => {
+  assert.equal(shouldHandlePeerChatNotificationInApp(true, 'active'), true)
+  assert.equal(shouldHandlePeerChatNotificationInApp(true, 'background'), false)
+  assert.equal(shouldHandlePeerChatNotificationInApp(true, 'inactive'), false)
+  assert.equal(shouldHandlePeerChatNotificationInApp(false, 'active'), false)
 })

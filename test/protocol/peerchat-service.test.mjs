@@ -363,27 +363,54 @@ test('PeerChat persists bounded unread and mention counts and clears them for ac
   await restarted.close()
 })
 
-test('PeerChat exposes bounded participant names from desktop profile frames', async (t) => {
+test('PeerChat exposes participant profiles from desktop profile and join frames', async (t) => {
   const storagePath = await mkdtemp(path.join(tmpdir(), 'peersky-peerchat-members-'))
   t.after(() => rm(storagePath, { recursive: true, force: true }))
   const service = await new PeerChatService({ sdk: createFakeSdk(), storagePath }).start()
   const room = await service.createRoom({ name: 'Members', username: 'Alice Mobile' })
-  const peer = {
-    id: 'desktop-peer',
-    username: '',
-    rooms: [room.roomKey],
-    controlRate: { count: 0, resetsAt: Date.now() + 60_000 }
-  }
-  service.peers.set({}, peer)
+  const peer = createFakePeer('desktop-peer', '')
+  peer.rooms = [room.roomKey]
+  service.peers.set(peer.connection, peer)
 
-  await service.handlePeerMessage(peer, { type: 'profile', username: 'Desktop User' })
+  const avatar = 'data:image/png;base64,YQ=='
+  await service.handlePeerMessage(peer, {
+    type: 'join',
+    roomKey: room.roomKey,
+    username: 'Desktop User',
+    bio: 'Desktop bio',
+    avatar
+  })
   assert.deepEqual(service.listRooms()[0].members, [
     { id: service.localId, username: 'Alice Mobile', bio: '', avatar: null, self: true, online: true },
-    { id: 'desktop-peer', username: 'Desktop User', bio: '', avatar: null, self: false, online: true }
+    { id: 'desktop-peer', username: 'Desktop User', bio: 'Desktop bio', avatar, self: false, online: true }
   ])
 
-  await service.handlePeerMessage(peer, { type: 'profile', username: '<invalid>' })
+  await service.handlePeerMessage(peer, { type: 'profile', username: '<invalid>', bio: '', avatar: null })
   assert.equal(service.listRooms()[0].members[1].username, 'Desktop User')
+  assert.equal(service.listRooms()[0].members[1].avatar, null)
+  await service.close()
+})
+
+test('PeerChat accepts valid room history from before the local join time', async (t) => {
+  const storagePath = await mkdtemp(path.join(tmpdir(), 'peersky-peerchat-prejoin-history-'))
+  t.after(() => rm(storagePath, { recursive: true, force: true }))
+  const service = await new PeerChatService({ sdk: createFakeSdk(), storagePath }).start()
+  await service.joinRoom({ roomKey: ROOM_KEY, username: 'Mobile' })
+  const peer = createFakePeer('desktop-peer', 'Desktop')
+
+  await service.handlePeerMessage(peer, {
+    type: 'sync',
+    id: 'message-before-mobile-joined',
+    roomKey: ROOM_KEY,
+    sender: 'desktop-peer',
+    sn: 'Desktop',
+    ...encryptPeerChatMessage('Earlier room history', ROOM_KEY),
+    ts: Date.now() - 60_000
+  })
+
+  const snapshot = await service.getSnapshot({ roomKey: ROOM_KEY, version: -1 })
+  assert.equal(snapshot.messages.length, 1)
+  assert.equal(snapshot.messages[0].message, 'Earlier room history')
   await service.close()
 })
 

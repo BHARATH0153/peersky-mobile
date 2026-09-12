@@ -1,8 +1,11 @@
 import { createAudioPlayer, type AudioSource } from 'expo-audio'
 
+import { playAndroidPeerChatSound } from './background-service'
+
 const SOUND_RELEASE_TIMEOUT_MS = 5000
 
-export function playPeerChatSound (source: AudioSource | string | number) {
+export function playPeerChatSound (kind: 'send' | 'receive', source: AudioSource | string | number) {
+  if (playAndroidPeerChatSound(kind)) return
   let player: ReturnType<typeof createAudioPlayer> | null = null
   let subscription: { remove: () => void } | null = null
   let releaseTimer: ReturnType<typeof setTimeout> | null = null

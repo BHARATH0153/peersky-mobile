@@ -117,10 +117,19 @@ describe('mobile platform runtime configuration', () => {
       repoFile('plugins/templates/PeerChatBackgroundService.kt.template'),
       'utf8'
     )
+    const backgroundModule = await readFile(
+      repoFile('plugins/templates/PeerChatBackgroundModule.kt.template'),
+      'utf8'
+    )
     assert.match(backgroundPlugin, /FOREGROUND_SERVICE_REMOTE_MESSAGING/)
     assert.match(backgroundPlugin, /foregroundServiceType': 'remoteMessaging'/)
     assert.match(backgroundService, /startForeground\(NOTIFICATION_ID, notification\)/)
+    assert.match(backgroundService, /HEARTBEAT_INTERVAL_MS/)
     assert.match(backgroundService, /START_NOT_STICKY/)
+    assert.match(backgroundModule, /SoundPool[.]Builder/)
+    assert.match(backgroundModule, /USAGE_ASSISTANCE_SONIFICATION/)
+    assert.match(backgroundModule, /PeerChatBackgroundTick/)
+    assert.doesNotMatch(backgroundModule, /MediaSession/)
   })
 
   it('configures local discovery on Android and iOS', async () => {

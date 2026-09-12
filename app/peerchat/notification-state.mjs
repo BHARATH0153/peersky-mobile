@@ -57,6 +57,10 @@ export function collectPeerChatNotificationCandidates (previousRooms, nextRooms)
     }))
 }
 
+export function shouldHandlePeerChatNotificationInApp (isPeerChatVisible, appState) {
+  return isPeerChatVisible === true && appState === 'active'
+}
+
 function truncateText (value, maximum) {
   return Array.from(String(value || ''))
     .map((character) => {
