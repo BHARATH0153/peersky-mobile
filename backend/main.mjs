@@ -3,6 +3,7 @@
 import RPC from 'bare-rpc'
 import { stopHolesail } from './holesail/session.mjs'
 import { stopHyperAssetServer } from './hyper/fetch.mjs'
+import { closeHyperOfflineDownloads } from './hyper/offline-manager.mjs'
 import { closeHyperRuntime } from './hyper/runtime.mjs'
 import { disconnectP2pmdRoom } from './p2pmd/room.mjs'
 import { closePeerChatService } from './peerchat/runtime.mjs'
@@ -17,6 +18,12 @@ function createRpc () {
 }
 
 Bare.on('beforeExit', async () => {
+  try {
+    await closeHyperOfflineDownloads()
+  } catch (error) {
+    console.error('[hyper] Failed to stop offline downloads on beforeExit:', error)
+  }
+
   try {
     await closePeerChatService()
   } catch (error) {

@@ -14,8 +14,10 @@ import {
   withHyperRetry
 } from './fetch-retry.mjs'
 import { withHyperRuntimeForAddress } from './runtime.mjs'
+import { refreshHyperRuntimeNetwork } from './network-refresh.mjs'
 import { createHyperUrl, parseHyperUrl } from './url.mjs'
 import { readHyperBinaryResponse } from './binary-response.mjs'
+import { configureHyperReadTimeout } from './read-policy.mjs'
 
 let hyperFetches = new WeakMap()
 
@@ -50,6 +52,7 @@ export async function fetchHyper ({
   const requestUrl = createHyperUrl(target.driveAddress, target.pathname)
 
   return withHyperRuntimeForAddress(target.driveAddress, async (runtime) => {
+    await prepareHyperRead(runtime, target.driveAddress)
     const fetch = await getHyperFetch(runtime)
 
     const result = await withHyperRetry({
@@ -59,13 +62,14 @@ export async function fetchHyper ({
       retryDelay,
       maxRetryDelay,
       backoffFactor,
+      beforeRetry: () => refreshHyperRuntimeNetwork(runtime),
       readResponse: async (response, headers) => {
         const responseUrl = response.url || requestUrl
         const mediaType = getHyperNavigationMediaType(responseUrl, headers)
         const downloadName = getHyperNavigationDownloadName(responseUrl, headers)
         if (downloadName && !mediaType) {
-          await cancelResponseBody(response.body)
-          const proxyServer = await startHyperAssetServer(routedHyperFetch)
+          await probeResponseBody(response.body)
+          const proxyServer = await startHyperAssetServer(routedHyperFetch, routedHyperRangeFetch)
           return {
             ok: response.ok,
             status: response.status,
@@ -84,7 +88,7 @@ export async function fetchHyper ({
 
         if (mediaType) {
           await cancelResponseBody(response.body)
-          const proxyServer = await startHyperAssetServer(routedHyperFetch)
+          const proxyServer = await startHyperAssetServer(routedHyperFetch, routedHyperRangeFetch)
           return {
             ok: response.ok,
             status: response.status,
@@ -104,7 +108,7 @@ export async function fetchHyper ({
         let body = await response.text()
 
         if (inlineAssets && isHtmlResponse(headers, body)) {
-          const proxyServer = await startHyperAssetServer(routedHyperFetch)
+          const proxyServer = await startHyperAssetServer(routedHyperFetch, routedHyperRangeFetch)
           body = await inlineHyperAssets({
             html: body,
             baseUrl: response.url || requestUrl,
@@ -177,6 +181,7 @@ export async function fetchHyperBinary ({
   const requestUrl = createHyperUrl(target.driveAddress, target.pathname)
 
   return withHyperRuntimeForAddress(target.driveAddress, async (runtime) => {
+    await prepareHyperRead(runtime, target.driveAddress)
     const fetch = await getHyperFetch(runtime)
 
     return withHyperRetry({
@@ -186,6 +191,7 @@ export async function fetchHyperBinary ({
       retryDelay,
       maxRetryDelay,
       backoffFactor,
+      beforeRetry: () => refreshHyperRuntimeNetwork(runtime),
       readResponse: (response, headers) => readHyperBinaryResponse(response, headers, requestUrl)
     })
   })
@@ -208,9 +214,97 @@ async function getHyperFetch (runtime) {
 
 function routedHyperFetch (url, options) {
   return withHyperRuntimeForAddress(url, async (runtime) => {
+    await prepareHyperRead(runtime, url)
     const fetch = await getHyperFetch(runtime)
     return fetch(url, options)
   })
+}
+
+function routedHyperRangeFetch (url, rangeHeader) {
+  const target = parseHyperUrl(url)
+  if (target.error) throw new Error(target.error)
+
+  return withHyperRuntimeForAddress(target.driveAddress, async (runtime) => {
+    await prepareHyperRead(runtime, target.driveAddress)
+    const drive = await runtime.getDrive(target.driveAddress)
+    const entry = await drive.entry(target.pathname)
+    const byteLength = Number(entry?.value?.blob?.byteLength)
+    const range = parseBoundedByteRange(rangeHeader, byteLength)
+    if (!range) throw new Error('Requested Hyper media range is unavailable')
+
+    return {
+      ok: true,
+      status: 200,
+      statusText: 'OK',
+      url,
+      headers: new Headers({
+        'Accept-Ranges': 'bytes',
+        'Content-Length': String(range.end - range.start + 1),
+        'Content-Range': `bytes ${range.start}-${range.end}/${byteLength}`
+      }),
+      body: drive.createReadStream(target.pathname, range)
+    }
+  })
+}
+
+function parseBoundedByteRange (rangeHeader, byteLength) {
+  if (!Number.isSafeInteger(byteLength) || byteLength < 1) return null
+  const match = String(rangeHeader || '').match(/^bytes=(?:(\d+)-(\d+)|-(\d+))$/i)
+  if (!match) return null
+
+  if (match[3]) {
+    const suffixLength = Number(match[3])
+    if (!Number.isSafeInteger(suffixLength) || suffixLength < 1) return null
+    return {
+      start: Math.max(0, byteLength - suffixLength),
+      end: byteLength - 1
+    }
+  }
+
+  const start = Number(match[1])
+  const requestedEnd = Number(match[2])
+  if (!Number.isSafeInteger(start) || !Number.isSafeInteger(requestedEnd) || start > requestedEnd || start >= byteLength) {
+    return null
+  }
+  return { start, end: Math.min(requestedEnd, byteLength - 1) }
+}
+
+async function probeResponseBody (body) {
+  if (!body) throw new Error('Hyper file response has no content')
+
+  if (typeof body[Symbol.asyncIterator] === 'function') {
+    const iterator = body[Symbol.asyncIterator]()
+    try {
+      const first = await iterator.next()
+      if (first.done || !first.value || first.value.byteLength === 0) {
+        throw new Error('Hyper file is empty or unavailable')
+      }
+    } finally {
+      if (typeof iterator.return === 'function') await iterator.return()
+    }
+    return
+  }
+
+  if (typeof body.getReader === 'function') {
+    const reader = body.getReader()
+    try {
+      const first = await reader.read()
+      if (first.done || !first.value || first.value.byteLength === 0) {
+        throw new Error('Hyper file is empty or unavailable')
+      }
+      await reader.cancel()
+    } finally {
+      if (reader.releaseLock) reader.releaseLock()
+    }
+    return
+  }
+
+  throw new Error('Hyper file response is not streamable')
+}
+
+async function prepareHyperRead (runtime, address) {
+  const drive = await runtime.getDrive(address)
+  configureHyperReadTimeout(drive)
 }
 
 function ensureFetchGlobals () {

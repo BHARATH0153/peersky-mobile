@@ -28,6 +28,7 @@ import {
   runP2pDataClear
 } from './storage-lifecycle.mjs'
 import { closePeerChatService } from '../peerchat/runtime.mjs'
+import { closeHyperOfflineDownloads } from './offline-manager.mjs'
 
 let storageTransition = Promise.resolve()
 
@@ -76,7 +77,10 @@ export async function clearP2pCache (options = {}) {
   return withStorageTransition(() => (
     options.getRuntime
       ? performP2pCacheClear(options)
-      : withHyperRuntimeMaintenance(() => performP2pCacheClear(options))
+      : withHyperRuntimeMaintenance(
+        () => performP2pCacheClear(options),
+        closeHyperOfflineDownloads
+      )
   ))
 }
 
@@ -84,7 +88,10 @@ export async function clearAllP2pData (options = {}) {
   return withStorageTransition(() => (
     options.getRuntime
       ? performAllP2pDataClear(options)
-      : withHyperRuntimeMaintenance(() => performAllP2pDataClear(options))
+      : withHyperRuntimeMaintenance(
+        () => performAllP2pDataClear(options),
+        closeHyperOfflineDownloads
+      )
   ))
 }
 

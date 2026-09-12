@@ -17,6 +17,7 @@ export type BrowserPreferences = {
   addressBarPosition: AddressBarPosition
   contentBlockingEnabled: boolean
   customSearchUrl: string
+  downloadOnlyOnWifi: boolean
   enforceManualPageZoom: boolean
   externalLinkBehavior: ExternalLinkBehavior
   restoreTabsOnStartup: boolean
@@ -99,6 +100,9 @@ export function useBrowserPreferences () {
         customSearchUrl: normalizedUrl,
         searchEngine: 'custom'
       })
+    },
+    setDownloadOnlyOnWifi: (downloadOnlyOnWifi: boolean) => {
+      return updatePreferences({ downloadOnlyOnWifi })
     },
     setEnforceManualPageZoom: (enforceManualPageZoom: boolean) => {
       return updatePreferences({ enforceManualPageZoom })

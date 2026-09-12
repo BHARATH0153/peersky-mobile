@@ -2,6 +2,7 @@ import type { ImageSourcePropType } from 'react-native'
 
 import {
   INTERNAL_APPS as INTERNAL_APP_REGISTRY,
+  canUseP2pAppPageActions as canUseP2pAppRegistryPageActions,
   getRuntimeAppFromUrl as getRuntimeAppFromRegistryUrl,
   getRuntimeAppTitle as getRuntimeAppRegistryTitle,
   getRuntimeAppUrl as getRuntimeAppRegistryUrl
@@ -37,6 +38,10 @@ export function getRuntimeAppFromUrl (targetUrl: string) {
 
 export function getRuntimeAppTitle (app: RuntimeTab) {
   return getRuntimeAppRegistryTitle(app)
+}
+
+export function canUseP2pAppPageActions (app: RuntimeTab, targetUrl: string) {
+  return canUseP2pAppRegistryPageActions(app, targetUrl)
 }
 
 export function getRuntimeAppIconSource (app: RuntimeTab) {

@@ -21,6 +21,7 @@ import {
 } from '../../app/browser-shell.mjs'
 import {
   INTERNAL_APPS,
+  canUseP2pAppPageActions,
   getRuntimeAppFromUrl,
   getRuntimeAppTitle,
   getRuntimeAppUrl
@@ -347,5 +348,14 @@ describe('internal app route registry', () => {
     assert.equal(getRuntimeAppTitle('peerchat'), 'PeerChat')
     assert.equal(getRuntimeAppTitle('holesail'), 'Holesail')
     assert.equal(getRuntimeAppTitle('hyper'), 'Hyperdrive')
+  })
+
+  test('enables page actions only for registered p2p app routes', () => {
+    assert.equal(canUseP2pAppPageActions('hyper', 'peersky://p2p/hyperdrive'), true)
+    assert.equal(canUseP2pAppPageActions('p2pmd', 'peersky://p2p/p2pmd/'), true)
+    assert.equal(canUseP2pAppPageActions('peerchat', 'peersky://p2p/peerchat/'), true)
+    assert.equal(canUseP2pAppPageActions('holesail', 'peersky://holesail/'), false)
+    assert.equal(canUseP2pAppPageActions('p2pmd', 'peersky://p2p/peerchat/'), false)
+    assert.equal(canUseP2pAppPageActions('p2pmd', 'peersky://settings/'), false)
   })
 })

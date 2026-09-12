@@ -9,6 +9,13 @@ import {
   RPC_HYPER_LIBRARY_LIST,
   RPC_HYPER_LIBRARY_UPLOAD,
   RPC_HYPER_LAN_STATUS,
+  RPC_HYPER_OFFLINE_KEEP,
+  RPC_HYPER_OFFLINE_LIST,
+  RPC_HYPER_OFFLINE_PAUSE,
+  RPC_HYPER_OFFLINE_REMOVE,
+  RPC_HYPER_OFFLINE_RESUME,
+  RPC_HYPER_OFFLINE_RESUME_ALL,
+  RPC_HYPER_REFRESH,
   RPC_HYPER_STORAGE_CLEAR_CACHE,
   RPC_HYPER_STORAGE_CLEAR_ALL,
   RPC_HYPER_STORAGE_DELETE_APP,
@@ -59,11 +66,21 @@ import { createDrive, publishMarkdownDocument, readHyperFile, uploadHyperFile } 
 import { listHyperdriveLocation, uploadHyperdriveFile } from '../hyper/library.mjs'
 import { fetchHyper, fetchHyperBinary, resetHyperFetch } from '../hyper/fetch.mjs'
 import {
+  closeHyperOfflineDownloads,
+  keepHyperOffline,
+  listHyperOffline,
+  pauseHyperOffline,
+  removeHyperOffline,
+  resumeHyperOffline,
+  resumeWantedHyperOffline
+} from '../hyper/offline-manager.mjs'
+import {
   closeHyperRuntime,
   ensureLANDiscovery,
   getHyperRuntime,
   getHyperStoragePath,
   getLANDiscoveryStatus,
+  refreshHyperNetworking,
   withHyperRuntimeMaintenance,
   withHyperRuntimeOperation
 } from '../hyper/runtime.mjs'
@@ -99,12 +116,18 @@ let pendingRestorePath = null
 export async function routeRpcRequest (req) {
   try {
     if (req.command === RPC_HYPER_INIT) {
+      const options = parseJsonMessage(req.data)
       await withHyperRuntimeOperation(() => {})
       replyJson(req, {
         ok: true,
         storagePath: getHyperStoragePath(),
         lan: getLANDiscoveryStatus()
       })
+      if (options.allowNetwork !== false) {
+        resumeWantedHyperOffline().catch((error) => {
+          console.error('[hyper] Failed to resume offline downloads:', error)
+        })
+      }
       return
     }
 
@@ -134,6 +157,41 @@ export async function routeRpcRequest (req) {
         ok: true,
         lan: getLANDiscoveryStatus()
       })
+      return
+    }
+
+    if (req.command === RPC_HYPER_REFRESH) {
+      replyJson(req, { ok: true, ...(await refreshHyperNetworking()) })
+      return
+    }
+
+    if (req.command === RPC_HYPER_OFFLINE_LIST) {
+      replyJson(req, await listHyperOffline(parseJsonMessage(req.data)))
+      return
+    }
+
+    if (req.command === RPC_HYPER_OFFLINE_KEEP) {
+      replyJson(req, await keepHyperOffline(parseJsonMessage(req.data)))
+      return
+    }
+
+    if (req.command === RPC_HYPER_OFFLINE_PAUSE) {
+      replyJson(req, await pauseHyperOffline(parseJsonMessage(req.data)))
+      return
+    }
+
+    if (req.command === RPC_HYPER_OFFLINE_RESUME) {
+      replyJson(req, await resumeHyperOffline(parseJsonMessage(req.data)))
+      return
+    }
+
+    if (req.command === RPC_HYPER_OFFLINE_RESUME_ALL) {
+      replyJson(req, await resumeWantedHyperOffline(parseJsonMessage(req.data)))
+      return
+    }
+
+    if (req.command === RPC_HYPER_OFFLINE_REMOVE) {
+      replyJson(req, await removeHyperOffline(parseJsonMessage(req.data)))
       return
     }
 
@@ -243,7 +301,7 @@ export async function routeRpcRequest (req) {
 
         await getHyperRuntime()
         return { ok: true, requiresRestart: true }
-      })
+      }, closeHyperOfflineDownloads)
       replyJson(req, result)
       return
     }

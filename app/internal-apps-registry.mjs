@@ -45,6 +45,12 @@ export function getRuntimeAppTitle (app) {
   return INTERNAL_APPS.find((item) => item.id === app)?.title || 'P2PMD'
 }
 
+export function canUseP2pAppPageActions (app, targetUrl) {
+  const registeredUrl = getRuntimeAppUrl(app)
+  return registeredUrl.startsWith('peersky://p2p/') &&
+    normalizeInternalAppUrl(registeredUrl) === normalizeInternalAppUrl(targetUrl)
+}
+
 function normalizeInternalAppUrl (targetUrl) {
   return String(targetUrl || '').replace(/\/+$/, '').toLowerCase()
 }

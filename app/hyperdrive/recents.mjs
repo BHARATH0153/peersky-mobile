@@ -52,6 +52,9 @@ function normalizeRecent (value) {
       .join('')
     : ''
   const openedAt = Number(value.openedAt)
+  const directoryIdentity = type === 'directory'
+    ? normalizeDirectoryIdentity(value, url)
+    : {}
 
   return {
     type,
@@ -66,10 +69,41 @@ function normalizeRecent (value) {
     byteLength: type === 'file' && Number.isSafeInteger(value.byteLength) && value.byteLength >= 0
       ? value.byteLength
       : 0,
+    ...directoryIdentity,
     children: type === 'directory' && Array.isArray(value.children)
       ? value.children.map(normalizeChild).filter(Boolean).slice(0, MAX_HYPERDRIVE_RECENT_CHILDREN)
       : undefined
   }
+}
+
+function normalizeDirectoryIdentity (value, url) {
+  let driveKey = normalizeDriveKey(value.driveKey)
+  let pathname
+
+  try {
+    const parsed = new URL(url)
+    driveKey ||= normalizeDriveKey(parsed.hostname)
+    pathname = normalizeDirectoryPath(decodeURIComponent(parsed.pathname))
+  } catch {}
+
+  return driveKey && pathname ? { driveKey, path: pathname } : {}
+}
+
+function normalizeDriveKey (value) {
+  if (typeof value !== 'string') return undefined
+  const key = value.trim().toLowerCase()
+  return /^(?:[a-f0-9]{64}|[ybndrfg8ejkmcpqxot1uwisza345h769]{52})$/.test(key)
+    ? key
+    : undefined
+}
+
+function normalizeDirectoryPath (value) {
+  if (typeof value !== 'string' || value.length > 2048 || !value.startsWith('/')) return undefined
+  if (value.includes('\\') || value.includes('?') || value.includes('#')) return undefined
+  const segments = value.split('/').filter(Boolean)
+  if (segments.includes('..')) return undefined
+  const pathname = `/${segments.filter((segment) => segment !== '.').join('/')}`
+  return pathname === '/' ? pathname : `${pathname}/`
 }
 
 function normalizeLocalFileUri (value) {
