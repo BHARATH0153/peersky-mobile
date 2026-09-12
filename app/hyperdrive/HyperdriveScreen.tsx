@@ -1,8 +1,10 @@
-import { useState, useRef } from 'react'
+import { useEffect, useState, useRef } from 'react'
 import {
   ActivityIndicator,
   Alert,
+  Animated,
   Clipboard,
+  Easing,
   Image,
   Modal,
   Pressable,
@@ -19,12 +21,19 @@ import { File } from 'expo-file-system'
 import ArrowLeftIcon from '../../assets/icons/bootstrap/arrow-left.svg'
 import ChevronRightIcon from '../../assets/icons/bootstrap/chevron-right.svg'
 import CopyIcon from '../../assets/icons/bootstrap/copy.svg'
+import CheckIcon from '../../assets/icons/bootstrap/check2.svg'
 import DownloadIcon from '../../assets/icons/bootstrap/download.svg'
+import PauseIcon from '../../assets/icons/bootstrap/pause-fill.svg'
 import UploadIcon from '../../assets/icons/bootstrap/arrow-bar-up.svg'
 
 import {
   RPC_HYPER_LIBRARY_LIST,
-  RPC_HYPER_LIBRARY_UPLOAD
+  RPC_HYPER_LIBRARY_UPLOAD,
+  RPC_HYPER_OFFLINE_KEEP,
+  RPC_HYPER_OFFLINE_LIST,
+  RPC_HYPER_OFFLINE_PAUSE,
+  RPC_HYPER_OFFLINE_REMOVE,
+  RPC_HYPER_OFFLINE_RESUME
 } from '../../backend/rpc/commands.mjs'
 import {
   recordHyperdriveRecent,
@@ -46,6 +55,7 @@ type HyperdriveItem = {
   name: string
   url: string
   path?: string
+  driveKey?: string
   byteLength?: number
   openedAt?: number
   source?: RecentSource
@@ -54,7 +64,17 @@ type HyperdriveItem = {
   children?: HyperdriveItem[]
 }
 
+type HyperOfflineItem = {
+  driveKey: string
+  path: string
+  status: 'available' | 'downloading' | 'error' | 'paused' | 'waiting-for-wifi'
+  downloadedBytes?: number
+  totalBytes?: number
+  percentage?: number
+}
+
 type Props = {
+  offlineNetworkAllowed: boolean
   isDark: boolean
   isLandscape: boolean
   onCallRpc: (command: number, data?: Record<string, unknown>) => Promise<any>
@@ -71,7 +91,7 @@ const RECENT_FILTERS: Array<{ id: RecentFilter, label: string }> = [
   { id: 'fetched', label: 'Fetched' }
 ]
 
-export function HyperdriveScreen ({ isDark, isLandscape, onCallRpc, onOpenItem, onOpenUrl, onStatus }: Props) {
+export function HyperdriveScreen ({ offlineNetworkAllowed, isDark, isLandscape, onCallRpc, onOpenItem, onOpenUrl, onStatus }: Props) {
   const [recents, setRecents] = useState<HyperdriveItem[]>(loadHyperdriveRecents)
   const [items, setItems] = useState<HyperdriveItem[] | null>(null)
   const [location, setLocation] = useState<HyperdriveItem | null>(null)
@@ -83,12 +103,125 @@ export function HyperdriveScreen ({ isDark, isLandscape, onCallRpc, onOpenItem, 
   const [error, setError] = useState<string | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
   const [isScanning, setIsScanning] = useState(false)
+  const [offlineItem, setOfflineItem] = useState<HyperOfflineItem | null>(null)
+  const [offlineBusy, setOfflineBusy] = useState(false)
+  const [offlineChecking, setOfflineChecking] = useState(false)
+  const offlineRequestRef = useRef(0)
   const scanHandledRef = useRef(false)
   const [cameraPermission, requestCameraPermission] = useCameraPermissions()
   const palette = isDark ? darkPalette : lightPalette
   const visibleItems = items ?? recents.filter((item) => recentFilter === 'all' || item.source === recentFilter)
   const heading = items ? location?.name || 'Files' : 'Recent'
   const filterLabel = RECENT_FILTERS.find((filter) => filter.id === recentFilter)?.label || 'All'
+  const offlineTarget = getOfflineTarget(location)
+
+  useEffect(() => {
+    const request = ++offlineRequestRef.current
+    setOfflineItem(null)
+    setOfflineBusy(false)
+    if (!offlineTarget) {
+      setOfflineChecking(false)
+      return
+    }
+
+    setOfflineChecking(true)
+    void loadOfflineState(offlineTarget, request, true)
+    return () => { offlineRequestRef.current += 1 }
+  }, [offlineTarget?.driveKey, offlineTarget?.path])
+
+  useEffect(() => {
+    if (!offlineTarget || (
+      offlineItem?.status !== 'downloading' &&
+      !(offlineNetworkAllowed && offlineItem?.status === 'waiting-for-wifi')
+    )) return
+    const request = offlineRequestRef.current
+    let cancelled = false
+    let timer: ReturnType<typeof setTimeout> | null = null
+
+    const poll = async () => {
+      await loadOfflineState(offlineTarget, request, false)
+      if (!cancelled && request === offlineRequestRef.current) {
+        timer = setTimeout(() => void poll(), 2000)
+      }
+    }
+
+    timer = setTimeout(() => void poll(), 2000)
+    return () => {
+      cancelled = true
+      if (timer) clearTimeout(timer)
+    }
+  }, [offlineItem?.status, offlineNetworkAllowed, offlineTarget?.driveKey, offlineTarget?.path])
+
+  async function loadOfflineState (target: { driveKey: string, path: string }, request: number, showLoading: boolean) {
+    if (showLoading) setOfflineChecking(true)
+    try {
+      const response = await onCallRpc(RPC_HYPER_OFFLINE_LIST, target)
+      if (request !== offlineRequestRef.current) return
+      if (!response.ok) throw new Error(response.error || 'Unable to check offline availability.')
+      const match = (Array.isArray(response.items) ? response.items : []).find((item: HyperOfflineItem) => (
+        item.driveKey === target.driveKey && item.path === target.path
+      ))
+      setOfflineItem(match || null)
+    } catch (offlineError) {
+      if (request === offlineRequestRef.current) {
+        setError(offlineError instanceof Error ? offlineError.message : String(offlineError))
+      }
+    } finally {
+      if (showLoading && request === offlineRequestRef.current) setOfflineChecking(false)
+    }
+  }
+
+  function updateOfflineFolder () {
+    if (!offlineTarget || !location || offlineBusy) return
+    if (offlineItem?.status === 'available') {
+      Alert.alert(
+        'Remove offline copy?',
+        'The folder will remain available from peers, but downloaded files will be removed from this device.',
+        [
+          { text: 'Cancel', style: 'cancel' },
+          { text: 'Remove', style: 'destructive', onPress: () => void runOfflineAction(RPC_HYPER_OFFLINE_REMOVE) }
+        ]
+      )
+      return
+    }
+
+    const command = offlineItem?.status === 'downloading'
+      ? RPC_HYPER_OFFLINE_PAUSE
+      : offlineItem ? RPC_HYPER_OFFLINE_RESUME : RPC_HYPER_OFFLINE_KEEP
+    void runOfflineAction(command)
+  }
+
+  async function runOfflineAction (command: number) {
+    if (!offlineTarget || !location || offlineBusy) return
+    const request = offlineRequestRef.current
+    setOfflineBusy(true)
+    setError(null)
+    setNotice(null)
+
+    try {
+      const payload = command === RPC_HYPER_OFFLINE_KEEP
+        ? { url: location.url, wait: false }
+        : {
+            driveKey: offlineTarget.driveKey,
+            path: offlineTarget.path,
+            ...(command === RPC_HYPER_OFFLINE_RESUME ? { wait: false } : {})
+          }
+      const response = await onCallRpc(command, payload)
+      if (!response.ok) throw new Error(response.error || 'Unable to update offline availability.')
+      if (request !== offlineRequestRef.current) return
+      setOfflineItem(response.item?.status === 'removed' ? null : response.item || null)
+      if (response.warning) setNotice(response.warning)
+      onStatus(response.item?.status === 'waiting-for-wifi'
+        ? 'Offline download waiting for Wi-Fi'
+        : getOfflineActionNotice(command))
+    } catch (offlineError) {
+      if (request === offlineRequestRef.current) {
+        setError(offlineError instanceof Error ? offlineError.message : String(offlineError))
+      }
+    } finally {
+      if (request === offlineRequestRef.current) setOfflineBusy(false)
+    }
+  }
 
   function chooseUploadVisibility () {
     if (busyAction) return
@@ -385,6 +518,27 @@ export function HyperdriveScreen ({ isDark, isLandscape, onCallRpc, onOpenItem, 
           </Pressable>
         )}
         <Text numberOfLines={1} style={[styles.heading, { color: palette.text }]}>{heading}</Text>
+        {items && offlineTarget && (
+          <Pressable
+            accessibilityLabel={getOfflineActionLabel(offlineItem)}
+            accessibilityRole='button'
+            disabled={offlineBusy || offlineChecking}
+            onPress={updateOfflineFolder}
+            style={({ pressed }) => [
+              styles.offlineButton,
+              { backgroundColor: palette.surface, borderColor: palette.border },
+              pressed ? styles.pressed : null,
+              offlineBusy || offlineChecking ? styles.disabled : null
+            ]}
+          >
+            {offlineBusy || offlineChecking
+              ? <ActivityIndicator color={palette.secondaryText} size='small' />
+              : <OfflineActionIcon item={offlineItem} color={palette.secondaryText} />}
+            <Text numberOfLines={1} style={[styles.offlineButtonText, { color: palette.secondaryText }]}>
+              {getOfflineActionLabel(offlineItem)}
+            </Text>
+          </Pressable>
+        )}
         {!items && recents.length > 0 && (
           <View style={styles.dropdownWrap}>
             <Pressable
@@ -417,6 +571,18 @@ export function HyperdriveScreen ({ isDark, isLandscape, onCallRpc, onOpenItem, 
           </View>
         )}
       </View>
+      {offlineItem?.status === 'downloading' && (
+        <View style={styles.offlineProgressRow}>
+          <OfflineProgressBar
+            color={palette.accent}
+            percentage={offlineItem.percentage}
+            trackColor={palette.border}
+          />
+          <Text style={[styles.offlineProgressText, { color: palette.muted }]}>
+            {Number.isFinite(offlineItem.percentage) ? `${offlineItem.percentage}%` : 'Downloading'}
+          </Text>
+        </View>
+      )}
       {listingTruncated && <Text style={[styles.limitNote, { color: palette.muted }]}>Showing a partial directory listing.</Text>}
 
       {isLandscape
@@ -497,6 +663,101 @@ function FilePreview ({ item, palette }: { item: HyperdriveItem, palette: Palett
   )
 }
 
+function OfflineActionIcon ({ item, color }: { item: HyperOfflineItem | null, color: string }) {
+  if (item?.status === 'available') return <CheckIcon width={16} height={16} color={color} />
+  if (item?.status === 'downloading') return <PauseIcon width={16} height={16} color={color} />
+  return <DownloadIcon width={16} height={16} color={color} />
+}
+
+function OfflineProgressBar ({ color, percentage, trackColor }: { color: string, percentage?: number, trackColor: string }) {
+  const progress = useRef(new Animated.Value(0)).current
+  const [trackWidth, setTrackWidth] = useState(0)
+  const indicatorWidth = Math.max(48, trackWidth * 0.28)
+  const determinatePercentage = Number.isFinite(percentage)
+    ? Math.max(0, Math.min(100, Number(percentage)))
+    : null
+
+  useEffect(() => {
+    if (determinatePercentage !== null) return
+    const animation = Animated.loop(Animated.timing(progress, {
+      duration: 1100,
+      easing: Easing.inOut(Easing.ease),
+      toValue: 1,
+      useNativeDriver: true
+    }))
+    animation.start()
+    return () => animation.stop()
+  }, [determinatePercentage, progress])
+
+  return (
+    <View
+      accessibilityLabel='Downloading for offline use'
+      accessibilityRole='progressbar'
+      accessibilityValue={determinatePercentage === null ? undefined : { min: 0, max: 100, now: determinatePercentage }}
+      onLayout={({ nativeEvent }) => setTrackWidth(nativeEvent.layout.width)}
+      style={[styles.offlineProgressTrack, { backgroundColor: trackColor }]}
+    >
+      {determinatePercentage === null
+        ? (
+          <Animated.View
+            style={[
+              styles.offlineProgressIndicator,
+              {
+                backgroundColor: color,
+                transform: [{ translateX: progress.interpolate({ inputRange: [0, 1], outputRange: [-indicatorWidth, trackWidth] }) }],
+                width: indicatorWidth
+              }
+            ]}
+          />
+          )
+        : (
+          <View
+            style={[
+              styles.offlineProgressIndicator,
+              { backgroundColor: color, width: `${determinatePercentage}%` }
+            ]}
+          />
+          )}
+    </View>
+  )
+}
+
+function getOfflineActionLabel (item: HyperOfflineItem | null) {
+  if (!item) return 'Keep offline'
+  if (item.status === 'available') return 'Remove offline'
+  if (item.status === 'downloading') return 'Pause'
+  if (item.status === 'waiting-for-wifi') return 'Waiting for Wi-Fi'
+  return 'Resume'
+}
+
+function getOfflineActionNotice (command: number) {
+  if (command === RPC_HYPER_OFFLINE_PAUSE) return 'Offline download paused'
+  if (command === RPC_HYPER_OFFLINE_REMOVE) return 'Offline copy removed'
+  return 'Offline download started'
+}
+
+function getOfflineTarget (item: HyperdriveItem | null) {
+  if (!item || item.type !== 'directory') return null
+  let path = item.path === '/' || item.path?.endsWith('/') ? item.path : null
+  let driveKey = item.driveKey?.toLowerCase()
+
+  try {
+    const parsed = new URL(item.url)
+    if (!driveKey) {
+      driveKey = parsed.hostname.toLowerCase()
+    }
+    if (!path) {
+      const pathname = decodeURIComponent(parsed.pathname)
+      path = pathname === '/' || pathname.endsWith('/') ? pathname : null
+    }
+  } catch {
+    if (!driveKey || !path) return null
+  }
+
+  if (!path || !/^(?:[a-f0-9]{64}|[ybndrfg8ejkmcpqxot1uwisza345h769]{52})$/.test(driveKey)) return null
+  return { driveKey, path }
+}
+
 function formatItemMeta (item: HyperdriveItem) {
   return item.type === 'directory' ? 'Folder' : formatBytes(item.byteLength || 0)
 }
@@ -553,6 +814,12 @@ const styles = StyleSheet.create({
   notice: { borderRadius: 10, fontSize: 13, fontWeight: '600', paddingHorizontal: 12, paddingVertical: 10 },
   libraryHeader: { alignItems: 'center', flexDirection: 'row', minHeight: 46, zIndex: 20 },
   heading: { flex: 1, fontSize: 20, fontWeight: '700' },
+  offlineButton: { alignItems: 'center', borderRadius: 8, borderWidth: 1, flexDirection: 'row', gap: 5, minHeight: 38, paddingHorizontal: 9 },
+  offlineButtonText: { fontSize: 11, fontWeight: '700' },
+  offlineProgressRow: { alignItems: 'center', flexDirection: 'row', gap: 8 },
+  offlineProgressText: { fontSize: 11, fontVariant: ['tabular-nums'], minWidth: 34, textAlign: 'right' },
+  offlineProgressTrack: { borderRadius: 2, flex: 1, height: 3, overflow: 'hidden' },
+  offlineProgressIndicator: { borderRadius: 2, height: 3 },
   backButton: { alignItems: 'center', height: 40, justifyContent: 'center', marginRight: 6, width: 34 },
   dropdownWrap: { position: 'relative', zIndex: 30 },
   filterButton: { alignItems: 'center', borderRadius: 8, borderWidth: 1, flexDirection: 'row', gap: 9, minWidth: 112, paddingHorizontal: 12, paddingVertical: 9 },

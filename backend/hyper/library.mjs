@@ -10,6 +10,7 @@ import {
 import { createHyperUrl, parseHyperUrl } from './url.mjs'
 import { recordHyperArchive } from './archive.mjs'
 import { resolveHyperdriveUploadTarget } from './storage-core.mjs'
+import { refreshHyperRuntimeNetwork } from './network-refresh.mjs'
 
 const MAX_UPLOAD_BYTES = 10 * 1024 * 1024
 const MAX_UPLOAD_BASE64_LENGTH = Math.ceil(MAX_UPLOAD_BYTES / 3) * 4
@@ -30,9 +31,25 @@ export async function listHyperdriveLocation ({ url } = {}, options = {}) {
     return await runWithRuntime(options, async (runtime) => {
       const drive = await runtime.getDrive(target.driveAddress)
       const explicitDirectory = target.pathname === '/' || target.pathname.endsWith('/')
-      const entry = explicitDirectory
+      let refreshed = false
+      const refreshDrive = async () => {
+        if (refreshed) return
+        refreshed = true
+        await (options.refreshRuntime || refreshHyperRuntimeNetwork)(runtime)
+        if (typeof drive.update === 'function') {
+          try {
+            await drive.update({ wait: false })
+          } catch {}
+        }
+      }
+      let entry = explicitDirectory
         ? null
         : await drive.entry(target.pathname, { timeout: MAX_LIST_TIME_MS })
+
+      if (!explicitDirectory && !entry) {
+        await refreshDrive()
+        entry = await drive.entry(target.pathname, { timeout: MAX_LIST_TIME_MS })
+      }
 
       if (entry?.value?.blob) {
         const response = {
@@ -53,7 +70,8 @@ export async function listHyperdriveLocation ({ url } = {}, options = {}) {
         target.driveAddress,
         directory,
         resolveListTimeMs(options.listTimeMs),
-        options.directoryRetryDelaysMs
+        options.directoryRetryDelaysMs,
+        refreshDrive
       )
       if (directory !== '/' && items.length === 0 && !timedOut) {
         return { ok: false, error: 'No file or directory was found at this Hyper URL.' }
@@ -64,7 +82,8 @@ export async function listHyperdriveLocation ({ url } = {}, options = {}) {
           type: 'directory',
           name: directory === '/' ? shortDriveName(target.driveAddress) : basename(directory),
           url: createHyperUrl(target.driveAddress, directory),
-          path: directory
+          path: directory,
+          driveKey: drive.id
         },
         items,
         truncated
@@ -89,7 +108,8 @@ async function listDirectoryWithDiscoveryRetry (
   driveAddress,
   directory,
   maxListTimeMs,
-  retryDelays = DIRECTORY_DISCOVERY_RETRY_DELAYS_MS
+  retryDelays = DIRECTORY_DISCOVERY_RETRY_DELAYS_MS,
+  refreshDrive
 ) {
   const startedAt = Date.now()
   const delays = Array.isArray(retryDelays)
@@ -106,7 +126,14 @@ async function listDirectoryWithDiscoveryRetry (
       directory,
       Math.max(1, maxListTimeMs - (Date.now() - startedAt))
     )
-    if (result.items.length > 0 || result.timedOut || !isAwaitingInitialMetadata(drive)) break
+    if (result.items.length > 0 || result.timedOut) break
+
+    if (attempts === 1 && refreshDrive) {
+      await refreshDrive()
+      continue
+    }
+
+    if (!isAwaitingInitialMetadata(drive)) break
 
     const delay = delays[attempts - 1]
     const remainingTime = maxListTimeMs - (Date.now() - startedAt)

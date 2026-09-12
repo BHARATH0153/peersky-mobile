@@ -46,20 +46,41 @@ describe('production Hyper fetch discovery retries', () => {
     assert.equal(result.error, 'Peers Not Found')
   })
 
+  it('refreshes discovery before retrying a peer failure', async () => {
+    let attempts = 0
+    let refreshes = 0
+    const result = await runWithRetry(async () => {
+      attempts++
+      if (attempts === 1) return errorResponse(404, 'Peers Not Found')
+      return successResponse(new Uint8Array([1]))
+    }, {
+      retries: 1,
+      retryDelay: 0,
+      maxRetryDelay: 0,
+      beforeRetry: async () => { refreshes++ }
+    })
+
+    assert.equal(result.ok, true)
+    assert.equal(refreshes, 1)
+  })
+
   it('does not retry a genuine missing-file response', async () => {
     let attempts = 0
+    let refreshes = 0
     const result = await runWithRetry(async () => {
       attempts++
       return errorResponse(404, 'File not found: /missing.html')
     }, {
       retries: 4,
       retryDelay: 0,
-      maxRetryDelay: 0
+      maxRetryDelay: 0,
+      beforeRetry: async () => { refreshes++ }
     })
 
     assert.equal(attempts, 1)
     assert.equal(result.ok, false)
     assert.equal(result.status, 404)
+    assert.equal(refreshes, 0)
   })
 
   it('recognizes both Hyper fetch peer-discovery messages', () => {
@@ -84,6 +105,45 @@ describe('production Hyper fetch discovery retries', () => {
     assert.equal(attempts, 1)
     assert.equal(result.ok, false)
     assert.equal(result.error, 'PeerSky request configuration failed')
+  })
+
+  it('returns a useful offline error for a timed-out unvisited file', async () => {
+    let attempts = 0
+    const result = await runWithRetry(async () => {
+      attempts++
+      const error = new Error('REQUEST_TIMEOUT')
+      error.code = 'REQUEST_TIMEOUT'
+      throw error
+    }, {
+      retries: 4,
+      retryDelay: 0,
+      maxRetryDelay: 0
+    })
+
+    assert.equal(attempts, 1)
+    assert.equal(result.ok, false)
+    assert.equal(
+      result.error,
+      'Hyper content is unavailable. Connect to the network or wait for a peer, then try again.'
+    )
+  })
+
+  it('does not retry a timeout returned as an HTTP failure', async () => {
+    let attempts = 0
+    const result = await runWithRetry(async () => {
+      attempts++
+      return errorResponse(502, 'REQUEST_TIMEOUT')
+    }, {
+      retries: 4,
+      retryDelay: 0,
+      maxRetryDelay: 0
+    })
+
+    assert.equal(attempts, 1)
+    assert.equal(
+      result.error,
+      'Hyper content is unavailable. Connect to the network or wait for a peer, then try again.'
+    )
   })
 })
 

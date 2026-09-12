@@ -45,6 +45,39 @@ test('runtime maintenance waits for active work and blocks new operations', asyn
   ])
 })
 
+test('runtime maintenance can cancel active work before waiting for it', async () => {
+  const coordinator = createRuntimeCoordinator()
+  const events = []
+  let releaseOperation
+
+  const operation = coordinator.runOperation(async () => {
+    events.push('operation-start')
+    await new Promise((resolve) => { releaseOperation = resolve })
+    events.push('operation-end')
+  })
+  await Promise.resolve()
+
+  const maintenance = coordinator.runMaintenance(
+    async () => { events.push('maintenance') },
+    async () => {
+      events.push('prepare')
+      releaseOperation()
+    }
+  )
+  const blockedOperation = coordinator.runOperation(async () => {
+    events.push('blocked-operation')
+  })
+
+  await Promise.all([operation, maintenance, blockedOperation])
+  assert.deepEqual(events, [
+    'operation-start',
+    'prepare',
+    'operation-end',
+    'maintenance',
+    'blocked-operation'
+  ])
+})
+
 test('runtime shutdown closes fulfilled runtimes when another opening fails', async () => {
   let closed = 0
   const runtime = { close: async () => { closed += 1 } }

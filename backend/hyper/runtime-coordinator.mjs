@@ -26,9 +26,11 @@ export function createRuntimeCoordinator () {
     }
   }
 
-  function runMaintenance (task) {
+  function runMaintenance (task, prepare = async () => {}) {
     maintenanceQueued += 1
     const run = maintenanceTail.then(async () => {
+      // New operations are blocked before active work is asked to stop.
+      await prepare()
       if (activeOperations > 0) {
         await new Promise((resolve) => { resolveIdle = resolve })
       }

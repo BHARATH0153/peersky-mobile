@@ -9,8 +9,9 @@ import HyperDHTmDNS from '@p2plabs/hyperdht-mdns'
 import { create as createSDK } from 'hyper-sdk'
 import { addLANReadinessBarrier } from '../../backend/hyper/lan-discovery.mjs'
 
-test('replicates a newly created Hyperdrive over the LAN bridge', { timeout: 20_000 }, async (t) => {
+test('downloads a Hyperdrive folder over LAN and reopens it offline', { timeout: 20_000 }, async (t) => {
   const storage = await mkdtemp(path.join(tmpdir(), 'peersky-mobile-lan-'))
+  const replicaStorage = path.join(storage, 'second')
   const bus = new Set()
   const sdks = []
   const lanPort = 40000 + (process.pid % 10000)
@@ -26,7 +27,7 @@ test('replicates a newly created Hyperdrive over the LAN bridge', { timeout: 20_
   })
   sdks.push(first)
   const second = await createSDK({
-    storage: path.join(storage, 'second'),
+    storage: replicaStorage,
     swarmOpts: { bootstrap: [], port: 0 }
   })
   sdks.push(second)
@@ -50,13 +51,45 @@ test('replicates a newly created Hyperdrive over the LAN bridge', { timeout: 20_
   await HyperDHTmDNS.attachHyperSDK(second, { lan: secondLAN })
 
   const source = await first.getDrive(`mobile-${randomBytes(6).toString('hex')}`)
-  await source.put('/index.html', Buffer.from('replicated from another mobile'))
+  const firstFile = Buffer.alloc(128 * 1024, 'a')
+  const siblingFile = Buffer.alloc(128 * 1024, 'b')
+  await source.put('/docs/first.txt', firstFile)
+  await source.put('/docs/sibling.txt', siblingFile)
+  await source.put('/outside.txt', Buffer.alloc(128 * 1024, 'c'))
 
   const replica = await second.getDrive(source.url)
-  const content = await replica.get('/index.html')
+  assert.deepEqual(await replica.get('/docs/first.txt'), firstFile)
+  assert.equal(await replica.has('/docs/first.txt'), true)
+  assert.equal(await replica.has('/docs/sibling.txt'), false)
+  assert.equal(await replica.has('/docs/'), false)
 
-  assert.equal(content?.toString(), 'replicated from another mobile')
-  assert.equal(replica.core.length > 0, true)
+  const interrupted = replica.download('/docs/')
+  interrupted.destroy()
+  await interrupted.done()
+
+  assert.equal(await replica.has('/docs/first.txt'), true)
+  assert.equal(await replica.has('/docs/sibling.txt'), false)
+  assert.equal(await replica.has('/docs/'), false)
+
+  const download = replica.download('/docs/')
+  await download.done()
+
+  assert.equal(await replica.has('/docs/'), true)
+  assert.deepEqual(await replica.get('/docs/sibling.txt'), siblingFile)
+  assert.equal(await replica.has('/outside.txt'), false)
+
+  await second.close()
+  const reopened = await createSDK({
+    storage: replicaStorage,
+    autoJoin: false,
+    swarmOpts: { bootstrap: [], port: 0 }
+  })
+  sdks.push(reopened)
+  const offlineReplica = await reopened.getDrive(source.url, { autoJoin: false })
+
+  assert.deepEqual(await offlineReplica.get('/docs/first.txt'), firstFile)
+  assert.deepEqual(await offlineReplica.get('/docs/sibling.txt'), siblingFile)
+  assert.equal(await offlineReplica.has('/docs/'), true)
 })
 
 class MemoryAdapter {

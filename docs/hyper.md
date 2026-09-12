@@ -1,73 +1,129 @@
+# Hyper protocol and offline data
 
-# Hyper protocol (mobile)
+PeerSky Mobile runs Hyperdrive inside a Bare worklet. The browser can open
+`hyper://` pages and files, and the Hyperdrive app can publish, fetch, browse,
+and explicitly retain folders for offline use.
 
-PeerSky Mobile includes a minimal Hyper runtime that runs inside a Bare worklet. This document explains what is included, how the RN UI talks to the runtime, basic developer steps, and some privacy/usage notes.
+## Supported URLs
 
-> This feature focuses only on the `hyper://` protocol using the Bare worklet. It intentionally excludes other protocols (IPFS/Web3) for now.
+- `hyper://<drive-key>/` opens a Hyperdrive root.
+- `hyper://<drive-key>/<path>` opens a file or directory in that drive.
+- DNS-style Hyper aliases, such as `hyper://agregore.mauve.moe/`, are resolved
+  by the Hyper runtime.
 
-## Supported URL schemes
+## Cached reads
 
-- `hyper://<drive>/` — access a Hyperdrive root
-- `hyper://<drive>/<path>` — access a file or path inside a drive
+Hypercore stores downloaded blocks on disk. A page or file that has already
+been read can therefore remain available after the network disappears or the
+app restarts. This cache is opportunistic: opening one file does not guarantee
+that its sibling files or the complete containing directory are available.
 
-Example: `hyper://akhilesh.art/` or `hyper://<drive-id>/index.html`
+When no peer is reachable, an uncached URL fails within a bounded time instead
+of waiting indefinitely. Use **Keep offline** when the entire directory must be
+available without a network connection.
 
-## Quick usage (manual smoke test)
+## Keep a folder offline
 
-1. Install deps: `npm install`
-2. Produce the Bare bundle (creates `app/app.bundle.mjs`):
+Offline retention is explicit and scoped to a folder. PeerSky does not provide
+a global switch that downloads every Hyperdrive.
 
-   npm run bundle:bare
+1. Open a directory in the Hyperdrive app.
+2. Tap **Keep offline**.
+3. Keep PeerSky open while the initial download runs.
+4. Wait for the state to change to **Available offline**.
 
-3. Run the app (Android/iOS):
+The active download displays byte-based percentage progress when the drive
+exposes enough block metadata. Otherwise it displays an indeterminate
+downloading state.
 
-   npm run android
-   # or
-   npm run ios
+The folder action reflects its current lifecycle:
 
-4. In the app UI wait for `Hyper ready (...)` then:
-   - Tap **Create Drive** — the app creates a writable Hyperdrive and returns a `hyper://...` URL.
-   - Paste a `hyper://` URL (for example `hyper://akhilesh.art/`) and tap **Fetch URL** — expect a file listing or file contents.
+- **Downloading**: missing blocks are being fetched.
+- **Pause**: stops the active download but keeps its wanted-offline entry and
+  blocks already stored on disk.
+- **Resume**: starts the folder download again and requests only missing
+  Hypercore blocks.
+- **Waiting for Wi-Fi**: the Wi-Fi-only policy is enabled and Wi-Fi is not
+  currently available.
+- **Available offline**: `drive.has(folder)` confirms that all files under the
+  selected path are locally available.
+- **Remove offline**: removes the wanted entry and clears managed blocks that
+  are not required by another retained path.
 
-## How it works (high level)
+## Restart and background behavior
 
-1. The React Native UI starts a Bare worklet using `Worklet.start()` and passes a storage path.
-2. RN creates a `bare-rpc` client bound to the worklet IPC to send commands.
-3. The worklet runs the bundled backend code which initializes `hyper-sdk` and exposes handlers for RPC commands.
-4. Backend modules handle drive creation, file reads, and URL parsing and reply with JSON responses.
+PeerSky records the drive key and folder path as soon as **Keep offline** is
+selected. If the process stops during a download, the entry remains persisted.
+On the next launch, PeerSky checks each wanted folder and resumes incomplete
+downloads from the blocks already present.
 
-## Architecture (key files)
+Pause and process termination do not discard completed blocks. Android may
+finish more work while backgrounded, but resume-on-open is the cross-platform
+guarantee and is also used on iOS.
 
-- `backend/backend.mjs` — Bare entry: starts RPC and manages lifecycle
-- `backend/rpc/commands.mjs` — RPC command IDs
-- `backend/rpc/router.mjs` — maps incoming RPC commands to handlers
-- `backend/rpc/messages.mjs` — JSON / binary helpers
-- `backend/hyper/runtime.mjs` — initialize/close `hyper-sdk`
-- `backend/hyper/fetch.mjs` — simple `GET`-only fetch handler
-- `backend/hyper/drive.mjs` — create a writable Hyperdrive and default `/index.html`
-- `backend/hyper/url.mjs` — parse and normalize `hyper://` URLs
-- `app/index.tsx` — RN test harness: starts worklet, creates RPC client, UI to create drives and fetch URLs
+## Wi-Fi-only downloads
 
-## RPC / API (contract)
+Open **Settings > P2P Data** and enable **Download only on Wi-Fi** to prevent
+offline-folder downloads over cellular data. Active downloads pause when the
+policy no longer permits network use and move to **Waiting for Wi-Fi**. They
+resume when Wi-Fi becomes available or when the policy is disabled.
 
-The RN UI and worklet speak over `bare-rpc`. The primary commands are:
+Normal foreground browsing is not blocked by this preference. It applies only
+to explicit offline-folder downloads.
 
-| Command | Request payload | Response |
-|---------|-----------------|---------|
-| `RPC_HYPER_INIT` | `{}` | `{ ok: true, storagePath }` or `{ ok: false, error }` |
-| `RPC_HYPER_FETCH` | `{ url: string, method?: 'GET' }` | `{ ok: true, status, statusText, url, headers, body }` or `{ ok: false, error }` |
-| `RPC_HYPER_CREATE_DRIVE` | `{ name?: string }` | `{ ok: true, status, statusText, url }` |
+## Manage offline data
 
-Responses may be returned as stringified JSON or as binary; the RN client converts binary to string using `b4a` and then parses JSON.
+Open **Settings > P2P Data > Offline Hyper folders** to view retained folders,
+their status, and their locally stored size when available. From this page a
+download can be paused, resumed, or removed.
 
-## Developer notes
+**Clear all P2P data** is broader than **Remove offline**. It closes active P2P
+runtimes and removes local Hyper and PeerChat data from the device.
 
-- The bundle (`app/app.bundle.mjs`) is generated from the `backend/` sources. Regenerate it after backend changes with `npm run bundle:bare`.
-- Prefer not to commit the generated bundle; add `app/app.bundle.mjs` to `.gitignore` and keep `.standardignore` so the linter skips it.
-- Keep `preandroid` / `preios` scripts to automatically bundle before native runs. Consider removing `prestart` to keep `expo start` fast during UI work.
+## Implementation
 
+The React Native UI communicates with the Bare backend through `bare-rpc`.
+Relevant files include:
 
-> [!IMPORTANT]
-> This implementation is an experimental Hyper runtime for development and testing. It is not a full browser UI and is intentionally scoped to protocol-level features. Do not use this as a production browser until further hardening, testing, and audits are completed.
+- `app/hyperdrive/HyperdriveScreen.tsx`: folder actions and progress UI.
+- `app/hyperdrive/offline-network.mjs`: Wi-Fi policy decision.
+- `app/settings/P2PStorage.tsx`: offline-folder management UI.
+- `backend/hyper/offline-core.mjs`: validation and bounded manifest entries.
+- `backend/hyper/offline-manifest.mjs`: atomic wanted-folder persistence.
+- `backend/hyper/offline-manager.mjs`: download, pause, resume, remove, and
+  progress lifecycle.
+- `backend/hyper/fetch.mjs`: bounded Hyper reads and cached response handling.
+- `backend/hyper/runtime.mjs`: Hyper SDK lifecycle and persistent storage.
+- `backend/rpc/commands.mjs` and `backend/rpc/router.mjs`: mobile/backend RPC
+  contract.
 
+The wanted-folder manifest is bounded to 100 validated entries. Progress scans
+and offline-size scans are also bounded so large or hostile drives cannot grow
+memory use without limit.
 
+## Development and tests
+
+Regenerate the Bare bundle after backend changes:
+
+```sh
+npm run bundle:bare
+```
+
+Run the automated runtime tests:
+
+```sh
+npm run test:runtime
+```
+
+Offline coverage is primarily in:
+
+- `test/protocol/hyper-offline-manager.test.mjs`
+- `test/protocol/hyper-offline-manifest.test.mjs`
+- `test/protocol/hyper-read-policy.test.mjs`
+- `test/protocol/hyper-lan-replication.test.mjs`
+- `test/platform/hyper-offline-network.test.mjs`
+- `test/platform/hyperdrive-recents.test.mjs`
+
+Real-device testing should still cover interrupted downloads, process restart,
+Wi-Fi-to-cellular transitions, large folders, and offline reads after a full
+app restart.
