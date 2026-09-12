@@ -368,7 +368,7 @@ test('PeerChat exposes participant profiles from desktop profile and join frames
   t.after(() => rm(storagePath, { recursive: true, force: true }))
   const service = await new PeerChatService({ sdk: createFakeSdk(), storagePath }).start()
   const room = await service.createRoom({ name: 'Members', username: 'Alice Mobile' })
-  const peer = createFakePeer('desktop-peer', '')
+  const peer = createFakePeer('deadbeef', '')
   peer.rooms = [room.roomKey]
   service.peers.set(peer.connection, peer)
 
@@ -382,13 +382,22 @@ test('PeerChat exposes participant profiles from desktop profile and join frames
   })
   assert.deepEqual(service.listRooms()[0].members, [
     { id: service.localId, username: 'Alice Mobile', bio: '', avatar: null, self: true, online: true },
-    { id: 'desktop-peer', username: 'Desktop User', bio: 'Desktop bio', avatar, self: false, online: true }
+    { id: 'deadbeef', username: 'Desktop User', bio: 'Desktop bio', avatar, self: false, online: true }
   ])
 
   await service.handlePeerMessage(peer, { type: 'profile', username: '<invalid>', bio: '', avatar: null })
   assert.equal(service.listRooms()[0].members[1].username, 'Desktop User')
   assert.equal(service.listRooms()[0].members[1].avatar, null)
+  service.peers.delete(peer.connection)
+  assert.equal(service.listRooms()[0].members[1].online, false)
   await service.close()
+
+  const restarted = await new PeerChatService({ sdk: createFakeSdk(), storagePath }).start()
+  assert.deepEqual(restarted.listRooms()[0].members.map(({ id, username, online }) => ({ id, username, online })), [
+    { id: restarted.localId, username: 'Alice Mobile', online: true },
+    { id: 'deadbeef', username: 'Desktop User', online: false }
+  ])
+  await restarted.close()
 })
 
 test('PeerChat accepts valid room history from before the local join time', async (t) => {

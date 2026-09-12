@@ -860,22 +860,29 @@ export class PeerChatService {
 
     if (message.type === 'profile') {
       if (!this.consumeControlRate(peer)) return
+      let changed = false
       const name = normalizePeerChatProfileName(message.username)
       if (name && name !== peer.username) {
         peer.username = name
-        this.bumpVersion()
+        changed = true
       }
       const bio = normalizePeerChatBio(message.bio)
       const avatar = normalizePeerChatAvatar(message.avatar)
       if (bio !== peer.bio || avatar !== peer.avatar) {
         peer.bio = bio
         peer.avatar = avatar
-        for (const room of this.rooms.values()) {
-          if (room.isDM && room.dmWith === peer.id) {
-            room.bio = bio
-            room.avatar = avatar
-          }
+        changed = true
+      }
+      for (const roomKey of peer.rooms) {
+        const room = this.rooms.get(roomKey)
+        if (!room) continue
+        if (room.isDM && room.dmWith === peer.id) {
+          room.bio = bio
+          room.avatar = avatar
         }
+        if (this.rememberRoomMember(room, peer)) changed = true
+      }
+      if (changed) {
         this.schedulePersist()
         this.bumpVersion()
       }
@@ -978,9 +985,11 @@ export class PeerChatService {
 
     if (message.type === 'join') {
       if (!this.consumeControlRate(peer)) return
+      const room = this.rooms.get(roomKey)
       if (message.username) peer.username = normalizePeerChatProfileName(message.username) || peer.username
       if (Object.hasOwn(message, 'bio')) peer.bio = normalizePeerChatBio(message.bio)
       if (Object.hasOwn(message, 'avatar')) peer.avatar = normalizePeerChatAvatar(message.avatar)
+      if (this.rememberRoomMember(room, peer)) this.schedulePersist()
       this.sendRoomMeta(peer, roomKey)
       await this.syncHistoryToPeerOnce(peer, roomKey)
       this.bumpVersion()
@@ -1540,12 +1549,27 @@ export class PeerChatService {
         online: true
       })
     }
+    const room = this.rooms.get(roomKey)
+    for (const member of room?.members || []) {
+      if (members.has(member.id)) continue
+      members.set(member.id, {
+        id: member.id,
+        username: member.username,
+        bio: member.bio,
+        avatar: member.avatar,
+        self: false,
+        online: false
+      })
+      if (members.size >= MAX_RETURNED_ROOM_MEMBERS) break
+    }
     for (const peer of this.peers.values()) {
-      if (!peer.rooms.includes(roomKey) || members.has(peer.id)) continue
+      if (!peer.rooms.includes(roomKey)) continue
+      const id = normalizePeerChatPeerId(peer.id)
       const username = normalizePeerChatProfileName(peer.username)
-      if (!username) continue
-      members.set(peer.id, {
-        id: peer.id,
+      if (!id || !username) continue
+      if (!members.has(id) && members.size >= MAX_RETURNED_ROOM_MEMBERS) break
+      members.set(id, {
+        id,
         username,
         bio: peer.bio || '',
         avatar: peer.avatar || null,
@@ -1555,6 +1579,30 @@ export class PeerChatService {
       if (members.size >= MAX_RETURNED_ROOM_MEMBERS) break
     }
     return [...members.values()]
+  }
+
+  rememberRoomMember (room, peer) {
+    const id = normalizePeerChatPeerId(peer?.id)
+    const username = normalizePeerChatProfileName(peer?.username)
+    if (!room || !id || id === this.localId || !username) return false
+
+    const members = Array.isArray(room.members) ? room.members : []
+    const index = members.findIndex((member) => member.id === id)
+    const existing = index >= 0 ? members[index] : null
+    const member = {
+      id,
+      username,
+      bio: normalizePeerChatBio(peer.bio),
+      avatar: normalizePeerChatAvatar(peer.avatar),
+      joinedAt: existing?.joinedAt || Date.now()
+    }
+    if (existing && JSON.stringify(existing) === JSON.stringify(member)) return false
+    if (!existing && members.length >= MAX_RETURNED_ROOM_MEMBERS - 1) return false
+
+    room.members = [...members]
+    if (index >= 0) room.members[index] = member
+    else room.members.push(member)
+    return true
   }
 
   trackMessageId (id) {
@@ -1616,7 +1664,8 @@ export class PeerChatService {
             normalizeUnreadCount(value?.unreadCount),
             normalizeUnreadCount(value?.unreadMentions)
           ),
-          lastReadTs: normalizePeerChatReadTimestamp(value?.lastReadTs)
+          lastReadTs: normalizePeerChatReadTimestamp(value?.lastReadTs),
+          members: normalizePersistedRoomMembers(value?.members, this.localId)
         })
       }
 
@@ -1704,6 +1753,26 @@ function normalizePersistedLastMessage (value) {
     message,
     timestamp: Number.isFinite(value.timestamp) ? value.timestamp : 0
   }
+}
+
+function normalizePersistedRoomMembers (value, localId) {
+  if (!Array.isArray(value)) return []
+  const members = []
+  const seen = new Set()
+  for (const candidate of value.slice(0, MAX_RETURNED_ROOM_MEMBERS - 1)) {
+    const id = normalizePeerChatPeerId(candidate?.id)
+    const username = normalizePeerChatProfileName(candidate?.username)
+    if (!id || id === localId || !username || seen.has(id)) continue
+    seen.add(id)
+    members.push({
+      id,
+      username,
+      bio: normalizePeerChatBio(candidate?.bio),
+      avatar: normalizePeerChatAvatar(candidate?.avatar),
+      joinedAt: normalizePeerChatReadTimestamp(candidate?.joinedAt)
+    })
+  }
+  return members
 }
 
 function waitForConnectionDrain (connection, timeoutMs = 5000) {
