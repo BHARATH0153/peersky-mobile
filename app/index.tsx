@@ -358,7 +358,6 @@ export default function App () {
     },
     onCallRpc: (command, data = {}) => callRpc(command, data) as Promise<PeerChatResponse>
   })
-  const [lastResult, setLastResult] = useState<RpcResponse | null>(null)
   const [hsLivePort, setHsLivePort] = useState('8989')
   const [hsLiveHost, setHsLiveHost] = useState('127.0.0.1')
   const [hsConnector, setHsConnector] = useState('')
@@ -1021,7 +1020,6 @@ export default function App () {
   function openInternalApp (app: RuntimeTab, shouldCommit = true) {
     const appUrl = getRuntimeAppUrl(app)
     cancelPendingBrowserLoad()
-    setLastResult(null)
     setActiveTab(app)
     setBrowserTitle(getRuntimeAppTitle(app))
     setStatus(`${getRuntimeAppTitle(app)} opened`)
@@ -1754,7 +1752,6 @@ export default function App () {
   async function onHolesailStartLive () {
     setIsLoading(true)
     setStatus('Starting Holesail live tunnel...')
-    setLastResult(null)
 
     try {
       const livePortValue = hsLivePort.trim()
@@ -1764,7 +1761,6 @@ export default function App () {
         connector: hsConnector.trim() || undefined,
         secure: true
       })
-      setLastResult(response)
 
       if (!response.ok) {
         setStatus(response.error || 'Failed starting Holesail live mode')
@@ -1782,7 +1778,6 @@ export default function App () {
   async function onHolesailConnect () {
     setIsLoading(true)
     setStatus('Connecting Holesail client...')
-    setLastResult(null)
 
     try {
       const connectPortValue = hsConnectPort.trim()
@@ -1791,7 +1786,6 @@ export default function App () {
         port: connectPortValue === '' ? undefined : Number(connectPortValue),
         host: hsConnectHost.trim()
       })
-      setLastResult(response)
 
       if (!response.ok) {
         setStatus(response.error || 'Failed connecting Holesail client')
@@ -1809,11 +1803,9 @@ export default function App () {
   async function onHolesailStatus () {
     setIsLoading(true)
     setStatus('Reading Holesail status...')
-    setLastResult(null)
 
     try {
       const response = await callRpc(RPC_HOLESAIL_STATUS, {})
-      setLastResult(response)
       setStatus(response.ok ? 'Holesail status loaded' : (response.error || 'Holesail status failed'))
     } catch (error) {
       setStatus(error instanceof Error ? error.message : String(error))
@@ -1825,11 +1817,9 @@ export default function App () {
   async function onHolesailStop () {
     setIsLoading(true)
     setStatus('Stopping Holesail session...')
-    setLastResult(null)
 
     try {
       const response = await callRpc(RPC_HOLESAIL_STOP, {})
-      setLastResult(response)
       setStatus(response.ok ? 'Holesail stopped' : (response.error || 'Failed stopping Holesail'))
     } catch (error) {
       setStatus(error instanceof Error ? error.message : String(error))
@@ -1887,7 +1877,6 @@ export default function App () {
     const isReopening = Boolean(roomKey)
     setIsLoading(true)
     setStatus(isReopening ? 'Reopening P2PMD room...' : 'Creating P2PMD room...')
-    setLastResult(null)
     setP2pmdRoom(null)
     setP2pmdUrl(null)
     setP2pmdParticipants(null)
@@ -1903,7 +1892,6 @@ export default function App () {
         secure: true,
         udp: false
       })
-      setLastResult(response)
 
       if (!response.ok || !response.room) {
         const message = response.error || 'Failed creating P2PMD room'
@@ -1935,7 +1923,6 @@ export default function App () {
     setP2pmdJoinKey(requestedKey)
     setIsLoading(true)
     setStatus('Joining P2PMD room...')
-    setLastResult(null)
     setP2pmdRoom(null)
     setP2pmdUrl(null)
     setP2pmdParticipants(null)
@@ -1950,7 +1937,6 @@ export default function App () {
         key: requestedKey,
         udp: false
       })
-      setLastResult(response)
 
       if (!response.ok || !response.room) {
         const message = response.error || 'Failed joining P2PMD room'
@@ -1990,11 +1976,9 @@ export default function App () {
   async function onP2pmdRoomRefresh () {
     setIsLoading(true)
     setStatus('Reading P2PMD room status...')
-    setLastResult(null)
 
     try {
       const response = await callRpc(RPC_P2PMD_ROOM_STATUS, {})
-      setLastResult(response)
 
       if (response.running && response.room) {
         await loadP2pmdEditorHtml()
@@ -2028,11 +2012,9 @@ export default function App () {
   async function onP2pmdRoomDisconnect () {
     setIsLoading(true)
     setStatus('Disconnecting P2PMD room...')
-    setLastResult(null)
 
     try {
       const response = await callRpc(RPC_P2PMD_ROOM_DISCONNECT, {})
-      setLastResult(response)
       setP2pmdUrl(null)
       setP2pmdRoom(null)
       setP2pmdParticipants(null)
@@ -2113,7 +2095,6 @@ export default function App () {
         mode: mode === 'slides' ? 'slides' : 'note',
         latexModeEnabled: latexModeEnabled === true
       })
-      setLastResult(response)
 
       if (!response.ok || typeof response.url !== 'string') {
         throw new Error(response.error || 'Unable to publish document to Hyper')
@@ -2156,8 +2137,6 @@ export default function App () {
           : action === 'peer-profile'
             ? saveP2pmdPeerDisplayName(peerProfileName)
           : { ok: false, error: `Unsupported P2PMD bridge action: ${action}` }
-
-      setLastResult(response)
       resolveP2pmdBridgeRequest(requestId, response)
     } catch (error) {
       resolveP2pmdBridgeRequest(requestId, {
@@ -3057,15 +3036,6 @@ export default function App () {
                         </SafeAreaView>
                       </View>
                     </Modal>
-                  </View>
-                )}
-                {(isBooting || isLoading) && <ActivityIndicator size='small' />}
-
-                {lastResult && activeTab !== 'p2pmd' && (
-                  <View style={[styles.result, { backgroundColor: browserChrome.button }]}>
-                    <Text selectable={true} style={[styles.resultText, { color: browserChrome.text }]}>
-                      {JSON.stringify(lastResult, null, 2)}
-                    </Text>
                   </View>
                 )}
               </ScrollView>

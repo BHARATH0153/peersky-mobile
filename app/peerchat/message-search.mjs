@@ -38,11 +38,6 @@ export function filterPeerChatMembers (members, query) {
   ].some((value) => typeof value === 'string' && value.toLocaleLowerCase().includes(normalizedQuery)))
 }
 
-export function getFirstUnreadMessageIndex (messages, lastReadTs) {
-  if (!Array.isArray(messages) || !Number.isSafeInteger(lastReadTs) || lastReadTs <= 0) return -1
-  return messages.findIndex((message) => Number.isSafeInteger(message?.timestamp) && message.timestamp > lastReadTs)
-}
-
 export function formatPeerChatDateLabel (timestamp, now = Date.now()) {
   if (!Number.isSafeInteger(timestamp) || timestamp < 0 || !Number.isSafeInteger(now) || now < 0) return ''
   const date = new Date(timestamp)

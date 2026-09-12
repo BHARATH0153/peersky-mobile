@@ -41,7 +41,6 @@ import {
   filterPeerChatRooms,
   formatPeerChatDateLabel,
   formatPeerChatMessageDetails,
-  getFirstUnreadMessageIndex,
   PEERCHAT_SEARCH_QUERY_MAX_CHARACTERS
 } from './message-search.mjs'
 import { normalizePeerChatMentionSpacing, splitPeerChatMentions } from './message-text.mjs'
@@ -279,7 +278,6 @@ export function PeerChatScreen ({
   const pollInFlightRef = useRef(false)
   const roomListPollInFlightRef = useRef(false)
   const actionInFlightRef = useRef(false)
-  const unreadScrollPendingRef = useRef(false)
   const isNearMessageBottomRef = useRef(true)
   const observedMessageIdsRef = useRef<Set<string> | null>(null)
   const roomOpenedAtRef = useRef(0)
@@ -311,7 +309,6 @@ export function PeerChatScreen ({
   const [pendingDirectMessages, setPendingDirectMessages] = useState<PeerChatDirectInvite[]>([])
   const [activeRoom, setActiveRoom] = useState<PeerChatRoom | null>(null)
   const [messages, setMessages] = useState<PeerChatMessage[]>([])
-  const [newMessagesAfter, setNewMessagesAfter] = useState<number | null>(null)
   const [showScrollToLatest, setShowScrollToLatest] = useState(false)
   const [composer, setComposer] = useState('')
   const [replyTarget, setReplyTarget] = useState<PeerChatReply | null>(null)
@@ -346,12 +343,6 @@ export function PeerChatScreen ({
     [isSearching, messages, searchQuery]
   )
   const displayedMessages = useMemo(() => [...visibleMessages].reverse(), [visibleMessages])
-  const firstUnreadMessageId = isSearching
-    ? null
-    : visibleMessages[getFirstUnreadMessageIndex(visibleMessages, newMessagesAfter)]?.id || null
-  const firstUnreadIndex = firstUnreadMessageId
-    ? displayedMessages.findIndex((message) => message.id === firstUnreadMessageId)
-    : -1
   const visibleRooms = filterPeerChatRooms(rooms, roomSearchQuery) as PeerChatRoom[]
   const visibleMembers = filterPeerChatMembers(
     activeRoom?.members || [],
@@ -539,7 +530,7 @@ export function PeerChatScreen ({
       observedMessageIdsRef.current = null
       roomOpenedAtRef.current = Date.now()
       setMessages([])
-      captureUnreadBoundary()
+      resetMessageScrollState()
       setActiveRoom(restoredRoom)
     }
     uiStateRef.current = {
@@ -813,7 +804,7 @@ export function PeerChatScreen ({
     setMemberSearchQuery('')
     setShowComposerEmoji(false)
     setEmojiSearchQuery('')
-    captureUnreadBoundary()
+    resetMessageScrollState()
     setActiveRoom(room)
     setRooms((current) => current.map((item) => item.roomKey === room.roomKey
       ? { ...item, unreadCount: 0, unreadMentions: 0 }
@@ -828,11 +819,9 @@ export function PeerChatScreen ({
     setShowComposerEmoji(false)
   }
 
-  function captureUnreadBoundary () {
-    unreadScrollPendingRef.current = false
+  function resetMessageScrollState () {
     isNearMessageBottomRef.current = true
     setShowScrollToLatest(false)
-    setNewMessagesAfter(null)
   }
 
   function saveRoomDetails () {
@@ -1587,17 +1576,12 @@ export function PeerChatScreen ({
           contentContainerStyle={displayedMessages.length > 0 ? styles.messageList : styles.emptyMessageList}
           onContentSizeChange={() => {
             if (isSearching) return
-            if (unreadScrollPendingRef.current && firstUnreadIndex >= 0) {
-              unreadScrollPendingRef.current = false
-              isNearMessageBottomRef.current = false
-              setShowScrollToLatest(true)
-              messageListRef.current?.scrollToIndex({ animated: false, index: firstUnreadIndex, viewPosition: 0 })
-            } else if (isNearMessageBottomRef.current) {
+            if (isNearMessageBottomRef.current) {
               messageListRef.current?.scrollToOffset({ animated: false, offset: 0 })
             }
           }}
           onScroll={({ nativeEvent }) => {
-            if (isSearching || unreadScrollPendingRef.current) return
+            if (isSearching) return
             const nearBottom = nativeEvent.contentOffset.y <= 80
             if (nearBottom === isNearMessageBottomRef.current) return
             isNearMessageBottomRef.current = nearBottom
@@ -1620,13 +1604,6 @@ export function PeerChatScreen ({
               : null
             return (
               <>
-              {index === firstUnreadIndex && (
-                <View accessibilityRole='text' style={styles.unreadDivider}>
-                  <View style={[styles.unreadDividerLine, { backgroundColor: colors.accent }]} />
-                  <Text style={[styles.unreadDividerText, { color: colors.accent }]}>New messages</Text>
-                  <View style={[styles.unreadDividerLine, { backgroundColor: colors.accent }]} />
-                </View>
-              )}
               {!!dateLabel && dateLabel !== previousDateLabel && (
                 <View accessibilityRole='text' style={styles.dateDivider}>
                   <View style={[styles.dateDividerLine, { backgroundColor: colors.border }]} />
@@ -3128,9 +3105,6 @@ const styles = StyleSheet.create({
   messageListContainer: { flex: 1 },
   messageList: { padding: 14, paddingBottom: 8 },
   emptyMessageList: { flexGrow: 1, justifyContent: 'center' },
-  unreadDivider: { alignItems: 'center', flexDirection: 'row', gap: 9, marginBottom: 14, marginTop: 5 },
-  unreadDividerLine: { flex: 1, height: StyleSheet.hairlineWidth },
-  unreadDividerText: { fontSize: 11, fontWeight: '700' },
   dateDivider: { alignItems: 'center', flexDirection: 'row', gap: 9, marginBottom: 12, marginTop: 4 },
   dateDividerLine: { flex: 1, height: StyleSheet.hairlineWidth },
   dateDividerText: { fontSize: 11, fontWeight: '600' },

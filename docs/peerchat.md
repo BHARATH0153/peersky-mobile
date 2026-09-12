@@ -10,7 +10,7 @@ topic, message-encryption, and transport formats as PeerSky Desktop.
 - Exchange encrypted messages with mobile and desktop peers.
 - Restore recent rooms and message history after an app restart.
 - Reply to messages, add reactions, mention peers, and search chats or messages.
-- Share public Hyperdrive attachments and bounded HTTP or HTTPS link previews.
+- Share room-encrypted Hyperdrive attachments and bounded HTTP or HTTPS link previews.
 - Start direct-message conversations through an explicit accept or decline flow.
 - Set a profile and host-owned room name, description, link, image, and moderation.
 - Pin or mute rooms and track unread messages and mentions.
@@ -61,10 +61,13 @@ must therefore be considered part of the local threat model.
 
 ## Attachments and link previews
 
-PeerChat attachments are uploaded to a public Hyperdrive and their `hyper://`
-address is sent inside the encrypted chat message. The message is encrypted, but
-the attachment bytes are not additionally encrypted by PeerChat. Anyone who
-obtains the attachment URL can request the file while a peer is available.
+PeerChat stores attachments in a dedicated Hyperdrive for each room. Before
+upload, file bytes are sealed with AES-256-GCM using a key derived from the room
+key and the opaque `PCA1` attachment format used by PeerSky Desktop. The real
+file name and size travel inside the encrypted chat message. Room members can
+decrypt attachments because they hold the room key; obtaining the `hyper://`
+URL alone exposes only ciphertext. Legacy plaintext attachments remain readable
+for compatibility.
 
 Link previews are optional and run only when the local user sends a public HTTP
 or HTTPS URL. Preview fetching rejects credentials, loopback, link-local, and

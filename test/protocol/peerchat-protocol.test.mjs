@@ -151,6 +151,21 @@ test('PeerChat AES-GCM payloads use the separated desktop message-key derivation
 
   assert.equal(independentlyDecrypted, 'hello desktop')
   assert.equal(decryptPeerChatMessage(encrypted, ROOM_KEY), 'hello desktop')
+})
+
+test('PeerChat rejects tampered encrypted messages', () => {
+  const encrypted = encryptPeerChatMessage('untampered message', ROOM_KEY)
+  const replacement = encrypted.ct[0] === '0' ? '1' : '0'
+
+  assert.throws(
+    () => decryptPeerChatMessage({ ...encrypted, ct: `${replacement}${encrypted.ct.slice(1)}` }, ROOM_KEY),
+    /authenticate data/
+  )
+})
+
+test('PeerChat room keys cannot decrypt messages from another room', () => {
+  const encrypted = encryptPeerChatMessage('room A message', ROOM_KEY)
+
   assert.throws(
     () => decryptPeerChatMessage(encrypted, 'cd'.repeat(32)),
     /authenticate data/

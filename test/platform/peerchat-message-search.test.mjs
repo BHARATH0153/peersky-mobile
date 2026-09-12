@@ -7,7 +7,6 @@ import {
   filterPeerChatRooms,
   formatPeerChatDateLabel,
   formatPeerChatMessageDetails,
-  getFirstUnreadMessageIndex,
   isPeerChatNearBottom,
   PEERCHAT_SEARCH_QUERY_MAX_CHARACTERS
 } from '../../app/peerchat/message-search.mjs'
@@ -55,20 +54,6 @@ test('PeerChat member search matches names, bios, and peer IDs', () => {
   assert.deepEqual(filterPeerChatMembers(members, 'peer-b').map((item) => item.id), ['peer-b'])
   assert.equal(filterPeerChatMembers(members, 'missing').length, 0)
   assert.deepEqual(filterPeerChatMembers(null, 'alice'), [])
-})
-
-test('PeerChat finds the first message after a valid read timestamp', () => {
-  const timeline = [
-    { id: '1', timestamp: 100 },
-    { id: '2', timestamp: 200 },
-    { id: '3', timestamp: 300 }
-  ]
-
-  assert.equal(getFirstUnreadMessageIndex(timeline, 200), 2)
-  assert.equal(getFirstUnreadMessageIndex(timeline, 300), -1)
-  assert.equal(getFirstUnreadMessageIndex(timeline, 0), -1)
-  assert.equal(getFirstUnreadMessageIndex(timeline, Number.MAX_SAFE_INTEGER + 1), -1)
-  assert.equal(getFirstUnreadMessageIndex(null, 200), -1)
 })
 
 test('PeerChat formats desktop-compatible message date separators', () => {

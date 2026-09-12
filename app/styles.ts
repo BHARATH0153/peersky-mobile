@@ -737,15 +737,6 @@ export const styles = StyleSheet.create({
     paddingHorizontal: 12,
     paddingVertical: 10
   },
-  result: {
-    backgroundColor: '#f6f6f6',
-    borderRadius: 8,
-    padding: 10
-  },
-  resultText: {
-    fontFamily: 'monospace',
-    fontSize: 12
-  },
   emptyRoomTitle: {
     color: '#f1f2f7',
     fontSize: 15,
