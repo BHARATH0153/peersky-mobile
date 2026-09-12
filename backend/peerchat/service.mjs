@@ -1271,7 +1271,9 @@ export class PeerChatService {
 
     const sync = this.syncHistoryToPeer(peer, roomKey)
       .then((completed) => {
-        if (completed) peer.syncedRooms.add(roomKey)
+        if (completed || peer.connection.destroyed || !peer.rooms.includes(roomKey)) {
+          peer.syncedRooms.add(roomKey)
+        }
         return completed
       })
       .finally(() => {
@@ -1510,8 +1512,10 @@ export class PeerChatService {
     if (this.pendingJoins.has(roomKey) || !this.joinedRooms.has(roomKey) || !this.feeds.has(roomKey)) {
       return 'connecting'
     }
-    for (const peer of this.peers.values()) {
-      if (peer.rooms.includes(roomKey) && peer.syncingRooms?.has(roomKey)) return 'syncing'
+    if (this.feeds.get(roomKey).length === 0) {
+      for (const peer of this.peers.values()) {
+        if (peer.rooms.includes(roomKey) && peer.syncingRooms?.has(roomKey)) return 'syncing'
+      }
     }
     return peerCount > 0 ? 'connected' : 'waiting'
   }

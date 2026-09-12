@@ -815,7 +815,7 @@ test('PeerChat evicts stale sockets so the swarm can reconnect after a network c
   await service.close()
 })
 
-test('PeerChat does not mark an interrupted history replay as synchronized', async (t) => {
+test('PeerChat finishes sync state for a connection that drops during history replay', async (t) => {
   const storagePath = await mkdtemp(path.join(tmpdir(), 'peersky-peerchat-interrupted-sync-'))
   t.after(() => rm(storagePath, { recursive: true, force: true }))
   const service = await new PeerChatService({ sdk: createFakeSdk(), storagePath }).start()
@@ -832,7 +832,26 @@ test('PeerChat does not mark an interrupted history replay as synchronized', asy
   }
 
   assert.equal(await service.syncHistoryToPeerOnce(peer, room.roomKey), false)
-  assert.equal(peer.syncedRooms.has(room.roomKey), false)
+  assert.equal(peer.syncedRooms.has(room.roomKey), true)
+  await service.close()
+})
+
+test('PeerChat reports syncing only while an empty room receives its first history', async (t) => {
+  const storagePath = await mkdtemp(path.join(tmpdir(), 'peersky-peerchat-sync-state-'))
+  t.after(() => rm(storagePath, { recursive: true, force: true }))
+  const service = await new PeerChatService({ sdk: createFakeSdk(), storagePath }).start()
+  await service.joinRoom({ roomKey: ROOM_KEY, username: 'Alice' })
+  const peer = createFakePeer('de'.repeat(4), 'Desktop')
+  peer.rooms = [ROOM_KEY]
+  peer.syncedRooms = new Set()
+  peer.syncingRooms = new Map()
+  peer.syncingRooms.set(ROOM_KEY, Promise.resolve(true))
+  service.peers.set(peer.connection, peer)
+
+  assert.equal(service.listRooms()[0].connectionState, 'syncing')
+  await service.sendMessage({ roomKey: ROOM_KEY, message: 'Local history exists' })
+  assert.equal(service.listRooms()[0].connectionState, 'connected')
+
   await service.close()
 })
 
