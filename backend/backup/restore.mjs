@@ -8,7 +8,9 @@ const ALLOWED_FILES = new Set([
   'lastOpened.json',
   'peersky-ports.json',
   'peersky-chat-rooms.json',
-  'peersky-identity.json'
+  'peersky-identity.json',
+  'privateHyperdrives.json',
+  'private-drive-key.json'
 ])
 
 export async function restoreIdentityFromBackup (innerZipBytes, storagePath) {
@@ -25,7 +27,7 @@ export async function restoreIdentityFromBackup (innerZipBytes, storagePath) {
       throw new Error('Refusing to restore device-key.json from backup')
     }
 
-    if (!ALLOWED_FILES.has(safeName) && !safeName.startsWith('hyper/')) {
+    if (!ALLOWED_FILES.has(safeName) && !safeName.startsWith('hyper/') && !safeName.startsWith('hyper-private/')) {
       throw new Error(`Refusing to restore unknown file: ${safeName}`)
     }
 

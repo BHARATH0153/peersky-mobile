@@ -31,9 +31,10 @@ import {
   getEncryptionPublicKeyHex
 } from '../backup/device-keys.mjs'
 import { decryptIdentityTransfer } from '../backup/identity-transfer.mjs'
+import { adoptTransferredPrivateDrive } from '../backup/private-drive-import.mjs'
 import { randomBytes } from 'node:crypto'
 import b4a from 'b4a'
-import { rmSync, renameSync } from 'bare-fs'
+import { rmSync, renameSync, existsSync } from 'bare-fs'
 import { restoreIdentityFromBackup } from '../backup/restore.mjs'
 
 import { createDrive, publishMarkdownDocument, readHyperFile, uploadHyperFile } from '../hyper/drive.mjs'
@@ -45,9 +46,11 @@ import {
   getHyperRuntime,
   getHyperStoragePath,
   getLANDiscoveryStatus,
+  getSyncedPrivateHyperStoragePath,
   withHyperRuntimeMaintenance,
   withHyperRuntimeOperation
 } from '../hyper/runtime.mjs'
+import { resetPrivateDriveKeyCache } from '../hyper/private-keys.mjs'
 import { clearAllP2pData, clearP2pCache, deleteP2pAppData, listP2pAppData } from '../hyper/storage.mjs'
 
 import {
@@ -204,9 +207,17 @@ export async function routeRpcRequest (req) {
       const result = await withHyperRuntimeMaintenance(async () => {
         const storagePath = getDefaultIdentityStoragePath()
         const backupPath = storagePath + '.backup'
+        const syncedPrivatePath = getSyncedPrivateHyperStoragePath()
+        const syncedPrivateStash = storagePath + '.synced-stash'
+        const hadSyncedPrivate = existsSync(syncedPrivatePath)
 
         await closeHyperRuntime()
         resetHyperFetch()
+
+        if (hadSyncedPrivate) {
+          try { rmSync(syncedPrivateStash, { recursive: true }) } catch (e) {}
+          try { renameSync(syncedPrivatePath, syncedPrivateStash) } catch (e) {}
+        }
 
         try {
           try { rmSync(backupPath, { recursive: true }) } catch (e) {}
@@ -214,11 +225,30 @@ export async function routeRpcRequest (req) {
           renameSync(pendingRestorePath, storagePath)
           pendingRestorePath = null
         } catch (err) {
+          if (hadSyncedPrivate && !existsSync(syncedPrivatePath) && existsSync(syncedPrivateStash)) {
+            try { renameSync(syncedPrivateStash, syncedPrivatePath) } catch (e) {}
+          }
           return { ok: false, error: `Atomic swap failed: ${err.message}` }
         }
 
+        if (hadSyncedPrivate && existsSync(syncedPrivateStash)) {
+          try { renameSync(syncedPrivateStash, syncedPrivatePath) } catch (e) {}
+        }
+
+        const privateDriveAdoption = adoptTransferredPrivateDrive(
+          storagePath,
+          getSyncedPrivateHyperStoragePath()
+        )
+        resetPrivateDriveKeyCache()
+
         await getHyperRuntime()
-        return { ok: true, requiresRestart: true }
+        return {
+          ok: true,
+          requiresRestart: true,
+          privateDriveRestored: privateDriveAdoption.adopted,
+          privateDriveId: privateDriveAdoption.driveId || undefined,
+          adoptedDriveIds: privateDriveAdoption.driveIds
+        }
       })
       replyJson(req, result)
       return

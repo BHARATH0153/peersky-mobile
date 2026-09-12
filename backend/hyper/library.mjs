@@ -1,10 +1,16 @@
 import b4a from 'b4a'
 import {
-  rememberPrivateHyperdrive,
+  getSyncedPrivateHyperdrive,
+  getSyncedPrivateHyperdriveForId,
+  isSyncedPrivateHyperdriveAddress,
+  rememberDeviceOnlyHyperdrive,
+  rememberSyncedPrivateHyperdrive,
   withHyperRuntimeForAddress,
   withHyperRuntimeOperation,
-  withPrivateHyperRuntimeOperation
+  withPrivateHyperRuntimeOperation,
+  withSyncedPrivateHyperRuntimeOperation
 } from './runtime.mjs'
+import { normalizeDriveAddressId } from './runtime-routing.mjs'
 import { parseHyperUrl } from './url.mjs'
 import { recordHyperArchive } from './archive.mjs'
 import { resolveHyperdriveUploadTarget } from './storage-core.mjs'
@@ -24,7 +30,7 @@ export async function listHyperdriveLocation ({ url } = {}, options = {}) {
 
   try {
     return await runWithRuntime(options, async (runtime) => {
-      const drive = await runtime.getDrive(target.driveAddress)
+      const drive = await resolveDriveForAddress(runtime, target.driveAddress, options)
       const entry = target.pathname === '/'
         ? null
         : await drive.entry(target.pathname, { timeout: MAX_LIST_TIME_MS })
@@ -111,10 +117,16 @@ export async function uploadHyperdriveFile ({ name, contentBase64, visibility } 
   }
 
   return withUploadTransition(() => runWithRuntime(options, async (runtime) => {
-    const drive = await runtime.getDrive(uploadTarget.driveName, {
-      autoJoin: uploadTarget.autoJoin
-    })
-    if (visibility === 'private') rememberPrivateHyperdrive(drive)
+    let drive
+    if (visibility === 'private') {
+      drive = await getSyncedPrivateDrive(options)
+      rememberSyncedPrivateHyperdrive(drive)
+    } else {
+      drive = await runtime.getDrive(uploadTarget.driveName, {
+        autoJoin: uploadTarget.autoJoin
+      })
+      if (visibility === 'device') rememberDeviceOnlyHyperdrive(drive)
+    }
     const pathname = await uniquePath(drive, `/${filename}`)
     await drive.put(pathname, bytes)
 
@@ -136,7 +148,7 @@ export async function uploadHyperdriveFile ({ name, contentBase64, visibility } 
         visibility
       }
     }
-  }, { privateRuntime: visibility === 'private' }))
+  }, { address: undefined, privateRuntime: visibility === 'device', syncedPrivate: visibility === 'private' }))
 }
 
 async function listDirectory (drive, driveAddress, directory, maxListTimeMs) {
@@ -309,9 +321,33 @@ function shortDriveName (driveAddress) {
   return `${key.slice(0, 8)}...${key.slice(-6)}`
 }
 
-function runWithRuntime (options, operation, { address, privateRuntime = false } = {}) {
+async function getSyncedPrivateDrive (options) {
+  if (typeof options.getSyncedPrivateDrive === 'function') {
+    return options.getSyncedPrivateDrive()
+  }
+  return getSyncedPrivateHyperdrive()
+}
+
+async function resolveDriveForAddress (runtime, driveAddress, options) {
+  if (isSyncedPrivateHyperdriveAddress(driveAddress)) {
+    const primary = await getSyncedPrivateDrive(options)
+    const addressId = normalizeDriveAddressId(driveAddress)
+    if (addressId && primary && String(primary.id).toLowerCase() !== addressId) {
+      const adopted = await getSyncedPrivateHyperdriveForId(addressId, runtime)
+      if (adopted) return adopted
+    }
+    return primary
+  }
+  return runtime.getDrive(driveAddress)
+}
+
+function runWithRuntime (options, operation, { address, privateRuntime = false, syncedPrivate = false } = {}) {
+  if (syncedPrivate && options.syncedPrivateRuntime) {
+    return operation(options.syncedPrivateRuntime)
+  }
   if (privateRuntime && options.privateRuntime) return operation(options.privateRuntime)
   if (options.runtime) return operation(options.runtime)
+  if (syncedPrivate) return withSyncedPrivateHyperRuntimeOperation(operation)
   if (privateRuntime) return withPrivateHyperRuntimeOperation(operation)
   if (address) return withHyperRuntimeForAddress(address, operation)
   return withHyperRuntimeOperation(operation)
