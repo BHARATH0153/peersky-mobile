@@ -52,6 +52,9 @@ function normalizeRecent (value) {
       .join('')
     : ''
   const openedAt = Number(value.openedAt)
+  const directoryIdentity = type === 'directory'
+    ? normalizeDirectoryIdentity(value, url)
+    : {}
 
   return {
     type,
@@ -61,13 +64,56 @@ function normalizeRecent (value) {
     visibility: value.visibility === 'public' || value.visibility === 'private'
       ? value.visibility
       : undefined,
+    localUri: value.source === 'uploaded' ? normalizeLocalFileUri(value.localUri) : undefined,
     openedAt: Number.isSafeInteger(openedAt) && openedAt > 0 ? openedAt : Date.now(),
     byteLength: type === 'file' && Number.isSafeInteger(value.byteLength) && value.byteLength >= 0
       ? value.byteLength
       : 0,
+    ...directoryIdentity,
     children: type === 'directory' && Array.isArray(value.children)
       ? value.children.map(normalizeChild).filter(Boolean).slice(0, MAX_HYPERDRIVE_RECENT_CHILDREN)
       : undefined
+  }
+}
+
+function normalizeDirectoryIdentity (value, url) {
+  let driveKey = normalizeDriveKey(value.driveKey)
+  let pathname
+
+  try {
+    const parsed = new URL(url)
+    driveKey ||= normalizeDriveKey(parsed.hostname)
+    pathname = normalizeDirectoryPath(decodeURIComponent(parsed.pathname))
+  } catch {}
+
+  return driveKey && pathname ? { driveKey, path: pathname } : {}
+}
+
+function normalizeDriveKey (value) {
+  if (typeof value !== 'string') return undefined
+  const key = value.trim().toLowerCase()
+  return /^(?:[a-f0-9]{64}|[ybndrfg8ejkmcpqxot1uwisza345h769]{52})$/.test(key)
+    ? key
+    : undefined
+}
+
+function normalizeDirectoryPath (value) {
+  if (typeof value !== 'string' || value.length > 2048 || !value.startsWith('/')) return undefined
+  if (value.includes('\\') || value.includes('?') || value.includes('#')) return undefined
+  const segments = value.split('/').filter(Boolean)
+  if (segments.includes('..')) return undefined
+  const pathname = `/${segments.filter((segment) => segment !== '.').join('/')}`
+  return pathname === '/' ? pathname : `${pathname}/`
+}
+
+function normalizeLocalFileUri (value) {
+  if (typeof value !== 'string' || value.length > 4096) return undefined
+
+  try {
+    const parsed = new URL(value)
+    return parsed.protocol === 'file:' && !parsed.hostname ? parsed.href : undefined
+  } catch {
+    return undefined
   }
 }
 
@@ -115,7 +161,7 @@ function normalizeHyperUrl (value) {
     if (parsed.protocol !== 'hyper:' || !parsed.hostname || parsed.username || parsed.password) return null
     const encodedPath = `${parsed.pathname}${parsed.search}${parsed.hash}`
       .split('/')
-      .map((segment) => encodeURIComponent(decodeURIComponent(segment)))
+      .map((segment) => encodeURI(decodeURIComponent(segment)).replace(/[?#]/g, encodeURIComponent))
       .join('/')
     return `hyper://${parsed.host}${encodedPath}`
   } catch {

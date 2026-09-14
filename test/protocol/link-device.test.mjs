@@ -13,6 +13,7 @@ import { extractTransferredPrivateDrive, adoptTransferredPrivateDrive } from '..
 import { restoreIdentityFromBackup } from '../../backend/backup/restore.mjs'
 import { resetPrivateDriveKeyCache } from '../../backend/hyper/private-keys.mjs'
 import { adoptedStoragePathFor } from '../../backend/hyper/runtime-routing.mjs'
+import { commitIdentityRestore, restoreIdentityFromBackup } from '../../backend/backup/restore.mjs'
 
 function canonicalJson (value) {
   if (Array.isArray(value)) return `[${value.map(canonicalJson).join(',')}]`
@@ -493,6 +494,33 @@ describe('Link Device Identity Transfer', () => {
     } finally {
       rmSync(sourcePath, { recursive: true, force: true })
       rmSync(targetPath, { recursive: true, force: true })
+  it('preserves device-local PeerChat state across repeated desktop identity restores', () => {
+    const parent = mkdtempSync(join(tmpdir(), 'peersky-identity-swap-'))
+    const storagePath = join(parent, 'current')
+    const backupPath = join(parent, 'backup')
+
+    try {
+      mkdirSync(join(storagePath, 'hyper-sdk'), { recursive: true })
+      writeFileSync(join(storagePath, 'device-key.json'), 'device-key')
+      writeFileSync(join(storagePath, 'hyper-sdk', 'peerchat-mobile.json'), 'mobile-chat')
+      writeFileSync(join(storagePath, 'peerchat-ui-state.json'), 'mobile-ui')
+      writeFileSync(join(storagePath, 'old-desktop.json'), 'desktop-a')
+
+      for (const identity of ['desktop-b', 'desktop-c']) {
+        const pendingPath = join(parent, `pending-${identity}`)
+        mkdirSync(pendingPath, { recursive: true })
+        writeFileSync(join(pendingPath, 'peersky-identity.json'), identity)
+
+        const result = commitIdentityRestore({ storagePath, pendingPath, backupPath })
+        assert.ok(result.preservedPaths.includes('hyper-sdk'))
+        assert.equal(readFileSync(join(storagePath, 'device-key.json'), 'utf8'), 'device-key')
+        assert.equal(readFileSync(join(storagePath, 'hyper-sdk', 'peerchat-mobile.json'), 'utf8'), 'mobile-chat')
+        assert.equal(readFileSync(join(storagePath, 'peerchat-ui-state.json'), 'utf8'), 'mobile-ui')
+        assert.equal(readFileSync(join(storagePath, 'peersky-identity.json'), 'utf8'), identity)
+        assert.equal(existsSync(pendingPath), false)
+      }
+    } finally {
+      rmSync(parent, { recursive: true, force: true })
     }
   })
 })

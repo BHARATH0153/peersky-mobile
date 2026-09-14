@@ -10,12 +10,12 @@ const HYPER_ASSET_HOST = '127.0.0.1'
 
 export { createHyperAssetServer } from './asset-server-core.mjs'
 
-export async function startHyperAssetServer (fetch) {
+export async function startHyperAssetServer (fetch, fetchRange) {
   return withAssetServerTransition(async () => {
     if (assetServer && assetServerInfo) return assetServerInfo
 
     const authToken = b4a.toString(randomBytes(32), 'hex')
-    const instance = createHyperAssetServer({ fetch, httpImpl: http, authToken })
+    const instance = createHyperAssetServer({ fetch, fetchRange, httpImpl: http, authToken })
 
     try {
       const address = await listen(instance)

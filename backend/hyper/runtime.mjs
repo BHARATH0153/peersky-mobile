@@ -34,6 +34,7 @@ import {
   HYPERDRIVE_DEVICE_DRIVE_NAME,
   HYPERDRIVE_PRIVATE_DRIVE_NAME
 } from './storage-core.mjs'
+import { refreshHyperRuntimeNetwork } from './network-refresh.mjs'
 
 let sdk = null
 let sdkOpening = null
@@ -52,6 +53,11 @@ let adoptedSdk = null
 let adoptedSdkOpening = null
 let adoptedStoragePath = null
 const syncedPrivateDrivesById = new Map()
+let privateSdk = null
+let privateSdkOpening = null
+let privateStoragePath = null
+let privateDriveId = null
+let networkRefresh = null
 const runtimeCoordinator = createRuntimeCoordinator()
 
 export function withHyperRuntimeOperation (task) {
@@ -74,8 +80,8 @@ export function withHyperRuntimeForAddress (address, task) {
   })
 }
 
-export function withHyperRuntimeMaintenance (task) {
-  return runtimeCoordinator.runMaintenance(task)
+export function withHyperRuntimeMaintenance (task, prepare) {
+  return runtimeCoordinator.runMaintenance(task, prepare)
 }
 
 export async function getHyperRuntime () {
@@ -285,6 +291,14 @@ export function ensureLANDiscovery () {
   return withHyperRuntimeOperation((runtime) => startLANDiscovery(runtime))
 }
 
+export function refreshHyperNetworking () {
+  if (!networkRefresh) {
+    networkRefresh = withHyperRuntimeOperation(refreshHyperRuntimeNetwork)
+      .finally(() => { networkRefresh = null })
+  }
+  return networkRefresh
+}
+
 export { getLANDiscoveryStatus }
 
 export async function closeHyperRuntime () {
@@ -312,6 +326,10 @@ export async function closeHyperRuntime () {
     deviceOnlyDriveId = null
     syncedPrivateDriveId = null
     resetPrivateDriveKeyCache()
+    privateSdk = null
+    privateSdkOpening = null
+    privateDriveId = null
+    networkRefresh = null
     resetLANDiscovery()
   }
 }

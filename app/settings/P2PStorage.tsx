@@ -5,10 +5,15 @@ import {
   Clipboard,
   Pressable,
   StyleSheet,
+  Switch,
   Text,
   View
 } from 'react-native'
 import {
+  RPC_HYPER_OFFLINE_LIST,
+  RPC_HYPER_OFFLINE_PAUSE,
+  RPC_HYPER_OFFLINE_REMOVE,
+  RPC_HYPER_OFFLINE_RESUME,
   RPC_HYPER_STORAGE_CLEAR_CACHE,
   RPC_HYPER_STORAGE_CLEAR_ALL,
   RPC_HYPER_STORAGE_DELETE_APP,
@@ -66,16 +71,39 @@ type HyperArchiveItem = {
   updatedAt: number
 }
 
+type HyperOfflineItem = {
+  driveKey: string
+  path: string
+  wantedAt: number
+  status: 'available' | 'downloading' | 'error' | 'paused' | 'waiting-for-wifi'
+  byteLength?: number
+  sizeTruncated?: boolean
+  sizeUnavailable?: boolean
+  error?: string
+}
+
+type HyperOfflineResponse = {
+  ok: boolean
+  error?: string
+  warning?: string
+  item?: HyperOfflineItem
+  items?: HyperOfflineItem[]
+}
+
 type P2PStorageProps = {
+  downloadOnlyOnWifi: boolean
+  offlineNetworkAllowed: boolean
   onCallRpc: (command: number, data?: object) => Promise<P2pStorageResponse>
+  onDownloadOnlyOnWifiChange: (enabled: boolean) => void
   onOpenItem: (item: { name: string, source: 'fetched' | 'published', url: string }) => void
 }
 
 const PAGE_SIZE = 5
 
-export function P2PStorage ({ onCallRpc, onOpenItem }: P2PStorageProps) {
+export function P2PStorage ({ downloadOnlyOnWifi, offlineNetworkAllowed, onCallRpc, onDownloadOnlyOnWifiChange, onOpenItem }: P2PStorageProps) {
   const isDark = useSettingsDarkMode()
   const requestSequence = useRef(0)
+  const offlineRequestSequence = useRef(0)
   const activeActionRef = useRef<string | null>(null)
   const appDataLoadedRef = useRef(false)
   const mountedRef = useRef(true)
@@ -84,10 +112,13 @@ export function P2PStorage ({ onCallRpc, onOpenItem }: P2PStorageProps) {
   const [archivePage, setArchivePage] = useState(1)
   const [archiveTotalPages, setArchiveTotalPages] = useState(1)
   const [archiveSource, setArchiveSource] = useState<HyperArchiveSource>('all')
+  const [offlineItems, setOfflineItems] = useState<HyperOfflineItem[]>([])
   const [isLoading, setIsLoading] = useState(true)
+  const [isOfflineLoading, setIsOfflineLoading] = useState(true)
   const [activeAction, setActiveAction] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
+  const [offlineError, setOfflineError] = useState<string | null>(null)
 
   useEffect(() => {
     void loadPage(archivePage, archiveSource)
@@ -98,6 +129,20 @@ export function P2PStorage ({ onCallRpc, onOpenItem }: P2PStorageProps) {
     mountedRef.current = true
     return () => { mountedRef.current = false }
   }, [])
+
+  useEffect(() => {
+    void loadOfflineItems()
+    return () => { offlineRequestSequence.current += 1 }
+  }, [])
+
+  useEffect(() => {
+    if (!offlineItems.some((item) => (
+      item.status === 'downloading' ||
+      (offlineNetworkAllowed && item.status === 'waiting-for-wifi')
+    ))) return
+    const timer = setTimeout(() => void loadOfflineItems(false), 2000)
+    return () => clearTimeout(timer)
+  }, [offlineItems, offlineNetworkAllowed])
 
   async function loadPage (
     nextPage: number,
@@ -132,6 +177,69 @@ export function P2PStorage ({ onCallRpc, onOpenItem }: P2PStorageProps) {
       setError(loadError instanceof Error ? loadError.message : String(loadError))
     } finally {
       if (sequence === requestSequence.current) setIsLoading(false)
+    }
+  }
+
+  async function loadOfflineItems (showLoading = true) {
+    const sequence = ++offlineRequestSequence.current
+    if (showLoading) setIsOfflineLoading(true)
+    setOfflineError(null)
+
+    try {
+      const response = await onCallRpc(RPC_HYPER_OFFLINE_LIST) as HyperOfflineResponse
+      if (sequence !== offlineRequestSequence.current) return
+      if (!response.ok) throw new Error(response.error || 'Unable to read offline folders.')
+      setOfflineItems(response.items || [])
+    } catch (loadError) {
+      if (sequence !== offlineRequestSequence.current) return
+      setOfflineError(loadError instanceof Error ? loadError.message : String(loadError))
+    } finally {
+      if (sequence === offlineRequestSequence.current) setIsOfflineLoading(false)
+    }
+  }
+
+  function confirmRemoveOffline (item: HyperOfflineItem) {
+    Alert.alert(
+      'Remove offline copy?',
+      `${formatOfflineName(item)} will remain available from peers, but its downloaded files will be removed from this device.`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Remove',
+          style: 'destructive',
+          onPress: () => void runOfflineAction(item, RPC_HYPER_OFFLINE_REMOVE)
+        }
+      ]
+    )
+  }
+
+  async function runOfflineAction (item: HyperOfflineItem, command: number) {
+    if (activeActionRef.current) return
+    const actionId = `offline:${item.driveKey}:${item.path}`
+    activeActionRef.current = actionId
+    setActiveAction(actionId)
+    setOfflineError(null)
+    setNotice(null)
+
+    try {
+      const payload = command === RPC_HYPER_OFFLINE_RESUME
+        ? { driveKey: item.driveKey, path: item.path, wait: false }
+        : { driveKey: item.driveKey, path: item.path }
+      const response = await onCallRpc(command, payload) as HyperOfflineResponse
+      if (!response.ok) throw new Error(response.error || 'Unable to update the offline folder.')
+      if (mountedRef.current) {
+        setNotice(response.item?.status === 'waiting-for-wifi'
+          ? 'Offline download is waiting for Wi-Fi.'
+          : response.warning || null)
+        await loadOfflineItems(false)
+      }
+    } catch (actionError) {
+      if (mountedRef.current) {
+        setOfflineError(actionError instanceof Error ? actionError.message : String(actionError))
+      }
+    } finally {
+      activeActionRef.current = null
+      if (mountedRef.current) setActiveAction(null)
     }
   }
 
@@ -180,7 +288,7 @@ export function P2PStorage ({ onCallRpc, onOpenItem }: P2PStorageProps) {
   function confirmClearCache () {
     Alert.alert(
       'Clear downloaded P2P cache?',
-      'This removes Hyper data downloaded from other peers. Locally owned P2PMD and Hyperdrive files are kept.',
+      'This removes Hyper data downloaded from other peers. Locally owned P2PMD and Hyperdrive files, PeerChat rooms, and message history are kept.',
       [
         { text: 'Cancel', style: 'cancel' },
         { text: 'Clear', style: 'destructive', onPress: () => void clearCache() }
@@ -219,7 +327,7 @@ export function P2PStorage ({ onCallRpc, onOpenItem }: P2PStorageProps) {
   function confirmClearAllData () {
     Alert.alert(
       'Clear all P2P data?',
-      'This permanently removes locally owned P2PMD and Hyperdrive files, downloaded Hyper data, and signing keys from this device. You will permanently lose the ability to update previously shared Hyper URLs, leaving them frozen unless another peer retains their signing keys.',
+      'This permanently removes locally owned P2PMD and Hyperdrive files, PeerChat rooms and message history, downloaded Hyper data, and signing keys from this device. You will permanently lose the ability to update previously shared Hyper URLs, leaving them frozen unless another peer retains their signing keys.',
       [
         { text: 'Cancel', style: 'cancel' },
         { text: 'Clear all', style: 'destructive', onPress: () => void clearAllData() }
@@ -242,7 +350,7 @@ export function P2PStorage ({ onCallRpc, onOpenItem }: P2PStorageProps) {
         : null
       if (mountedRef.current) {
         setNotice(joinNotices(response.warning, recentWarning))
-        Alert.alert('P2P data cleared', 'All local Hyper data was removed from this device.')
+        Alert.alert('P2P data cleared', 'All local Hyper and PeerChat data was removed from this device.')
         await refreshArchive()
       }
     } catch (clearError) {
@@ -341,6 +449,91 @@ export function P2PStorage ({ onCallRpc, onOpenItem }: P2PStorageProps) {
           ))}
 
       </SettingsSection>
+
+      <SettingsSection title='Offline Hyper folders'>
+        <View style={[styles.offlinePreference, isDark ? darkStyles.divider : null]}>
+          <View style={styles.copy}>
+            <Text style={[styles.title, isDark ? darkStyles.primaryText : null]}>Download only on Wi-Fi</Text>
+            <Text style={[styles.description, isDark ? darkStyles.secondaryText : null]}>
+              Wait for Wi-Fi before saving Hyper folders for offline use.
+            </Text>
+          </View>
+          <Switch
+            accessibilityLabel='Download offline Hyper folders only on Wi-Fi'
+            value={downloadOnlyOnWifi}
+            onValueChange={onDownloadOnlyOnWifiChange}
+            trackColor={{ false: '#bac3d2', true: '#7eb2ee' }}
+            thumbColor={downloadOnlyOnWifi ? '#1f6fd1' : '#ffffff'}
+          />
+        </View>
+        {isOfflineLoading && offlineItems.length === 0
+          ? <ActivityIndicator style={styles.loading} />
+          : offlineItems.length === 0
+            ? <Text style={[styles.empty, isDark ? darkStyles.secondaryText : null]}>No folders are kept offline.</Text>
+            : offlineItems.map((item, index) => {
+              const actionId = `offline:${item.driveKey}:${item.path}`
+              const isActive = activeAction === actionId
+              const canResume = item.status === 'paused' || item.status === 'waiting-for-wifi' || item.status === 'error'
+
+              return (
+                <View
+                  key={`${item.driveKey}:${item.path}`}
+                  style={[
+                    styles.offlineRow,
+                    index > 0 ? styles.divider : null,
+                    index > 0 && isDark ? darkStyles.divider : null
+                  ]}
+                >
+                  <View style={styles.copy}>
+                    <Text numberOfLines={1} style={[styles.title, isDark ? darkStyles.primaryText : null]}>
+                      {formatOfflineName(item)}
+                    </Text>
+                    <Text numberOfLines={1} style={[styles.url, isDark ? darkStyles.secondaryText : null]}>
+                      {shortOfflineUrl(item)}
+                    </Text>
+                    <Text style={[styles.description, isDark ? darkStyles.secondaryText : null]}>
+                      {formatOfflineStatus(item)}
+                    </Text>
+                  </View>
+                  <View style={styles.offlineActions}>
+                    {item.status === 'downloading' && (
+                      <Pressable
+                        accessibilityLabel={`Pause ${formatOfflineName(item)} offline download`}
+                        accessibilityRole='button'
+                        disabled={activeAction !== null}
+                        onPress={() => void runOfflineAction(item, RPC_HYPER_OFFLINE_PAUSE)}
+                        style={({ pressed }) => [styles.offlineAction, pressed ? styles.buttonPressed : null, activeAction !== null ? styles.disabled : null]}
+                      >
+                        <Text style={[styles.clearText, isDark ? darkStyles.actionText : null]}>{isActive ? 'Pausing...' : 'Pause'}</Text>
+                      </Pressable>
+                    )}
+                    {canResume && (
+                      <Pressable
+                        accessibilityLabel={`Resume ${formatOfflineName(item)} offline download`}
+                        accessibilityRole='button'
+                        disabled={activeAction !== null}
+                        onPress={() => void runOfflineAction(item, RPC_HYPER_OFFLINE_RESUME)}
+                        style={({ pressed }) => [styles.offlineAction, pressed ? styles.buttonPressed : null, activeAction !== null ? styles.disabled : null]}
+                      >
+                        <Text style={[styles.clearText, isDark ? darkStyles.actionText : null]}>{isActive ? 'Starting...' : 'Resume'}</Text>
+                      </Pressable>
+                    )}
+                    <Pressable
+                      accessibilityLabel={`Remove ${formatOfflineName(item)} offline copy`}
+                      accessibilityRole='button'
+                      disabled={activeAction !== null}
+                      onPress={() => confirmRemoveOffline(item)}
+                      style={({ pressed }) => [styles.offlineAction, pressed ? styles.buttonPressed : null, activeAction !== null ? styles.disabled : null]}
+                    >
+                      <Text style={styles.deleteText}>{isActive ? 'Working...' : 'Remove'}</Text>
+                    </Pressable>
+                  </View>
+                </View>
+              )
+            })}
+      </SettingsSection>
+
+      {offlineError && <Text accessibilityRole='alert' style={styles.error}>{offlineError}</Text>}
 
       {notice && <Text accessibilityRole='alert' style={styles.notice}>{notice}</Text>}
 
@@ -520,6 +713,36 @@ function formatTimestamp (timestamp: number) {
   return new Date(timestamp).toLocaleString()
 }
 
+function formatOfflineName (item: HyperOfflineItem) {
+  if (item.path === '/') return 'Entire drive'
+  const parts = item.path.split('/').filter(Boolean)
+  const name = parts[parts.length - 1] || item.path
+  try {
+    return decodeURIComponent(name)
+  } catch {
+    return name
+  }
+}
+
+function shortOfflineUrl (item: HyperOfflineItem) {
+  const key = item.driveKey.length > 16
+    ? `${item.driveKey.slice(0, 8)}...${item.driveKey.slice(-6)}`
+    : item.driveKey
+  return `hyper://${key}${item.path}`
+}
+
+function formatOfflineStatus (item: HyperOfflineItem) {
+  if (item.status === 'available') {
+    if (item.sizeUnavailable) return 'Available offline - size unavailable'
+    const suffix = item.sizeTruncated ? '+' : ''
+    return `Available offline - ${formatBytes(item.byteLength || 0)}${suffix}`
+  }
+  if (item.status === 'downloading') return 'Downloading for offline use'
+  if (item.status === 'waiting-for-wifi') return 'Waiting for Wi-Fi'
+  if (item.status === 'error') return item.error || 'Download failed'
+  return 'Paused'
+}
+
 function joinNotices (...notices: Array<string | null | undefined>) {
   return notices.filter(Boolean).join(' ') || null
 }
@@ -540,6 +763,31 @@ const styles = StyleSheet.create({
     minHeight: 78,
     paddingHorizontal: 18,
     paddingVertical: 14
+  },
+  offlineRow: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: 10,
+    minHeight: 82,
+    paddingHorizontal: 18,
+    paddingVertical: 11
+  },
+  offlinePreference: {
+    alignItems: 'center',
+    borderBottomColor: '#e6ecf5',
+    borderBottomWidth: 1,
+    flexDirection: 'row',
+    gap: 12,
+    paddingHorizontal: 18,
+    paddingVertical: 14
+  },
+  offlineActions: {
+    alignItems: 'flex-end',
+    gap: 2
+  },
+  offlineAction: {
+    paddingHorizontal: 4,
+    paddingVertical: 5
   },
   archiveRow: {
     alignItems: 'center',

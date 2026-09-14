@@ -18,6 +18,15 @@ test('constructs the recents file lazily inside protected storage operations', (
   assert.doesNotMatch(source, /const RECENTS_FILE = new File/)
 })
 
+test('Hyperdrive folder browsing exposes offline lifecycle actions', () => {
+  const source = readFileSync(new URL('../../app/hyperdrive/HyperdriveScreen.tsx', import.meta.url), 'utf8')
+  assert.match(source, /RPC_HYPER_OFFLINE_KEEP/)
+  assert.match(source, /RPC_HYPER_OFFLINE_PAUSE/)
+  assert.match(source, /RPC_HYPER_OFFLINE_RESUME/)
+  assert.match(source, /RPC_HYPER_OFFLINE_REMOVE/)
+  assert.match(source, /Keep offline/)
+})
+
 test('normalizes, deduplicates, and removes recent Hyper entries', () => {
   const first = recordHyperdriveRecent([], {
     type: 'file', name: 'Report', url: `${DRIVE_URL}report.pdf`, byteLength: 12, source: 'uploaded'
@@ -54,6 +63,23 @@ test('persists a bounded fetched directory snapshot for reopening without anothe
     url: `${DRIVE_URL}photos/photo.jpg`,
     byteLength: 42
   }])
+  assert.equal(parsed[0].driveKey, 'b'.repeat(64))
+  assert.equal(parsed[0].path, '/photos/')
+})
+
+test('preserves resolved folder identity for named Hyper URLs', () => {
+  const driveKey = 'c'.repeat(64)
+  const recents = recordHyperdriveRecent([], {
+    type: 'directory',
+    name: 'Docs',
+    url: 'hyper://example.com/docs/',
+    driveKey,
+    path: '/docs/'
+  }, 10)
+
+  const parsed = parseHyperdriveRecents(serializeHyperdriveRecents(recents))
+  assert.equal(parsed[0].driveKey, driveKey)
+  assert.equal(parsed[0].path, '/docs/')
 })
 
 test('bounds cached directory snapshots across persisted recents', () => {
@@ -102,6 +128,16 @@ test('preserves filenames containing URL query and fragment characters', () => {
     `${DRIVE_URL}report%232%3F.pdf`)
 })
 
+test('keeps path-safe delimiters literal for hypercore-fetch lookups', () => {
+  const recents = recordHyperdriveRecent([], {
+    type: 'file',
+    name: 'one, two.mp4',
+    url: `${DRIVE_URL}one%2C%20two.mp4`
+  }, 10)
+
+  assert.equal(recents[0].url, `${DRIVE_URL}one,%20two.mp4`)
+})
+
 test('truncates recent names without splitting Unicode characters', () => {
   const expectedName = `${'a'.repeat(159)}😀`
   const recents = recordHyperdriveRecent([], {
@@ -139,4 +175,32 @@ test('persists valid upload visibility while keeping legacy recents compatible',
   const parsed = parseHyperdriveRecents(serializeHyperdriveRecents(recents))
   assert.equal(parsed[0].visibility, 'private')
   assert.equal(parsed[1].visibility, undefined)
+})
+
+test('preserves only app-local file URIs for uploaded recents', () => {
+  const localUri = 'file:///data/user/0/xyz.p2plabs.peersky/cache/DocumentPicker/report.pdf'
+  const uploaded = recordHyperdriveRecent([], {
+    type: 'file',
+    name: 'Report',
+    url: `${DRIVE_URL}report.pdf`,
+    source: 'uploaded',
+    localUri
+  }, 10)
+  const fetched = recordHyperdriveRecent([], {
+    type: 'file',
+    name: 'Remote',
+    url: `${DRIVE_URL}remote.pdf`,
+    source: 'fetched',
+    localUri
+  }, 10)
+
+  assert.equal(parseHyperdriveRecents(serializeHyperdriveRecents(uploaded))[0].localUri, localUri)
+  assert.equal(fetched[0].localUri, undefined)
+  assert.equal(recordHyperdriveRecent([], {
+    type: 'file',
+    name: 'Unsafe',
+    url: `${DRIVE_URL}unsafe.pdf`,
+    source: 'uploaded',
+    localUri: 'https://example.com/report.pdf'
+  }, 10)[0].localUri, undefined)
 })

@@ -16,6 +16,7 @@ import {
   Clipboard,
   Easing,
   Modal,
+  Platform,
   Pressable,
   SafeAreaView,
   ScrollView,
@@ -152,9 +153,11 @@ type SettingsScreenProps = {
   addressBarPosition: AddressBarPosition
   contentBlockingEnabled: boolean
   customSearchUrl: string
+  downloadOnlyOnWifi: boolean
   enforceManualPageZoom: boolean
   externalLinkBehavior: ExternalLinkBehavior
   isDark: boolean
+  offlineNetworkAllowed: boolean
   persistenceError: string | null
   restoreTabsOnStartup: boolean
   searchEngine: SearchEngine
@@ -170,6 +173,7 @@ type SettingsScreenProps = {
   onClearBrowsingData: () => boolean
   onClearCachedData: () => boolean
   onCustomSearchSave: (url: string) => boolean
+  onDownloadOnlyOnWifiChange: (enabled: boolean) => void
   onEnforceManualPageZoomChange: (enabled: boolean) => void
   onExternalLinkBehaviorChange: (behavior: ExternalLinkBehavior) => void
   onFilterListsUpdated: () => void
@@ -187,6 +191,19 @@ type SettingsScreenProps = {
 
 const REPOSITORY_URL = 'https://github.com/p2plabsxyz/peersky-mobile'
 const LICENSE_URL = `${REPOSITORY_URL}/blob/main/LICENSE`
+const CONTENT_REPORT_TITLE = '[Content report]: '
+const CONTENT_REPORT_BODY = `## Content URL
+
+Provide the public HTTP, HTTPS, or Hyper URL where the content is available.
+
+## Reason for reporting
+
+Explain why this content should be reviewed without reproducing harmful content.
+
+## Confirmation
+
+- [ ] I have not included private credentials, personal information, or illegal media in this report.`
+const CONTENT_REPORT_URL = `${REPOSITORY_URL}/issues/new?template=content-report.yml&title=${encodeURIComponent(CONTENT_REPORT_TITLE)}&body=${encodeURIComponent(CONTENT_REPORT_BODY)}`
 
 const SETTINGS_PAGES: Array<{
   id: Exclude<SettingsPage, 'main'>
@@ -281,7 +298,15 @@ export function SettingsScreen(props: SettingsScreenProps) {
         {page === 'appearance' && <Appearance {...props} />}
         {page === 'data-clearing' && <DataClearing {...props} />}
         {page === 'privacy' && <Privacy {...props} />}
-        {page === 'p2p-storage' && <P2PStorage onCallRpc={props.onCallRpc} onOpenItem={props.onOpenHyperItem} />}
+        {page === 'p2p-storage' && (
+          <P2PStorage
+            downloadOnlyOnWifi={props.downloadOnlyOnWifi}
+            offlineNetworkAllowed={props.offlineNetworkAllowed}
+            onCallRpc={props.onCallRpc}
+            onDownloadOnlyOnWifiChange={props.onDownloadOnlyOnWifiChange}
+            onOpenItem={props.onOpenHyperItem}
+          />
+        )}
         {page === 'permissions' && <Permissions {...props} />}
         {page === 'link-device' && <LinkDeviceSettings {...props} />}
         {page === 'lan-discovery' && <LANDiscoveryTest onCallRpc={props.onCallRpc} />}
@@ -847,6 +872,8 @@ async function withTimeout<T> (promise: Promise<T>, timeoutMs: number) {
 
 function AboutSettings({ onOpenUrl }: { onOpenUrl: (url: string) => void }) {
   const isDark = useSettingsDarkMode()
+  const platformName = Platform.OS === 'ios' ? 'iOS' : 'Android'
+  const feedbackUrl = `${REPOSITORY_URL}/issues/new?title=${encodeURIComponent(`[${platformName}] Feedback`)}`
 
   return (
     <View style={[styles.pageContent, isDark ? darkStyles.page : null]}>
@@ -857,7 +884,7 @@ function AboutSettings({ onOpenUrl }: { onOpenUrl: (url: string) => void }) {
             description={`Version ${Constants.expoConfig?.version || 'unknown'}`}
           />
         </View>
-        <Pressable style={styles.linkRow} onPress={() => onOpenUrl(REPOSITORY_URL)}>
+        <Pressable accessibilityRole='link' style={styles.linkRow} onPress={() => onOpenUrl(REPOSITORY_URL)}>
           <Text style={[styles.linkText, isDark ? darkStyles.primaryText : null]}>Source code</Text>
           <ChevronRightIcon
             width={16}
@@ -865,8 +892,24 @@ function AboutSettings({ onOpenUrl }: { onOpenUrl: (url: string) => void }) {
             color={isDark ? BROWSER_PALETTES.dark.mutedText : '#8190a7'}
           />
         </Pressable>
-        <Pressable style={styles.linkRow} onPress={() => onOpenUrl(LICENSE_URL)}>
+        <Pressable accessibilityRole='link' style={styles.linkRow} onPress={() => onOpenUrl(LICENSE_URL)}>
           <Text style={[styles.linkText, isDark ? darkStyles.primaryText : null]}>Open-source licenses</Text>
+          <ChevronRightIcon
+            width={16}
+            height={16}
+            color={isDark ? BROWSER_PALETTES.dark.mutedText : '#8190a7'}
+          />
+        </Pressable>
+        <Pressable accessibilityRole='link' style={styles.linkRow} onPress={() => onOpenUrl(CONTENT_REPORT_URL)}>
+          <Text style={[styles.linkText, isDark ? darkStyles.primaryText : null]}>Report harmful content</Text>
+          <ChevronRightIcon
+            width={16}
+            height={16}
+            color={isDark ? BROWSER_PALETTES.dark.mutedText : '#8190a7'}
+          />
+        </Pressable>
+        <Pressable accessibilityRole='link' style={styles.linkRow} onPress={() => onOpenUrl(feedbackUrl)}>
+          <Text style={[styles.linkText, isDark ? darkStyles.primaryText : null]}>Send {platformName} feedback</Text>
           <ChevronRightIcon
             width={16}
             height={16}

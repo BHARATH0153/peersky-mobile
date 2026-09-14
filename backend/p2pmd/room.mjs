@@ -5,17 +5,23 @@ import {
   startHolesailLive,
   stopHolesail
 } from '../holesail/session.mjs'
-import {
-  getAvailableLoopbackPort,
-  P2PMD_LOOPBACK_HOST
-} from './network.mjs'
-import { connectWithPreferredLoopbackPort } from './connect.mjs'
+import { P2PMD_LOOPBACK_HOST } from './constants.mjs'
+import { connectWithAdvertisedLoopbackPort } from './connect.mjs'
 import {
   getP2pmdServerStatus,
   startP2pmdServer,
   stopP2pmdServer
 } from './server.mjs'
-import { resetDocumentState } from './document.mjs'
+import {
+  getDocumentState,
+  resetDocumentState,
+  updateDocumentState
+} from './document.mjs'
+import {
+  activateP2pmdRoomSnapshot,
+  deactivateP2pmdRoomSnapshot,
+  loadP2pmdRoomSnapshot
+} from './snapshots.mjs'
 
 const JOIN_READY_ATTEMPTS = 12
 const JOIN_READY_DELAY_MS = 500
@@ -25,12 +31,21 @@ let room = null
 let roomTransition = Promise.resolve()
 
 export async function createP2pmdRoom ({
+  connector,
   secure = true,
   udp = false,
   log = false
 } = {}) {
   return withRoomTransition(async () => {
     await disconnectRoomInternal()
+
+    if (connector) {
+      const snapshot = loadP2pmdRoomSnapshot(connector)
+      if (snapshot) {
+        const restored = updateDocumentState(snapshot.content, snapshot.lineAttributions)
+        if (!restored.ok) return restored
+      }
+    }
 
     const serverResult = await startP2pmdServer()
     if (!serverResult.ok) return serverResult
@@ -39,6 +54,7 @@ export async function createP2pmdRoom ({
       const holesailResult = await startHolesailLive({
         host: serverResult.host,
         port: serverResult.port,
+        connector,
         secure,
         udp,
         log
@@ -69,6 +85,15 @@ export async function createP2pmdRoom ({
         udp: Boolean(udp)
       }
 
+      if (connector && room.key !== connector.trim()) {
+        await Promise.allSettled([stopHolesail(), stopP2pmdServer()])
+        room = null
+        resetDocumentState()
+        return { ok: false, error: 'Unable to restore the original P2PMD room key.' }
+      }
+
+      activateP2pmdRoomSnapshot(room.key, getDocumentState())
+
       return {
         ok: true,
         running: true,
@@ -92,9 +117,8 @@ export async function joinP2pmdRoom ({
   return withRoomTransition(async () => {
     await disconnectRoomInternal()
 
-    const holesailResult = await connectWithPreferredLoopbackPort({
+    const holesailResult = await connectWithAdvertisedLoopbackPort({
       connect: connectHolesail,
-      getAvailablePort: getAvailableLoopbackPort,
       key,
       udp,
       log
@@ -175,6 +199,7 @@ export async function disconnectP2pmdRoom () {
 }
 
 async function disconnectRoomInternal () {
+  deactivateP2pmdRoomSnapshot(room?.role === 'host' ? getDocumentState() : null)
   const results = await Promise.allSettled([
     stopHolesail(),
     stopP2pmdServer()
