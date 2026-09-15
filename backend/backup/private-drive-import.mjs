@@ -78,7 +78,7 @@ export function adoptTransferredPrivateDrive (storagePath, syncedPrivateStorageP
 
     return {
       adopted: true,
-      driveId: transferred[0].driveId,
+      driveId: (transferred.find((entry) => entry.driveId) || transferred[0]).driveId,
       encrypted: transferred.some((entry) => entry.key),
       driveIds: transferred.map((entry) => entry.driveId)
     }
@@ -94,16 +94,20 @@ function extractSerializedPrivateDriveKey (serialized) {
 
     if (parsed.version === 3) {
       if (Array.isArray(parsed.entries) && parsed.entries.length > 0) {
+        const topKey = normalizePrivateDriveKey(parsed.key)
         const drives = []
         for (const entry of parsed.entries) {
           const driveId = isValidPrivateDriveId(entry?.driveId) ? String(entry.driveId).toLowerCase() : null
           if (!driveId) continue
+          const entryKey = normalizePrivateDriveKey(entry?.key) || topKey
+          const encryptable = entryKey !== null && (entry?.encrypted ?? parsed.encrypted) !== false
+          const announceable = entryKey !== null && (entry?.announce ?? parsed.announce) !== false
           drives.push({
-            key: null,
+            key: entryKey ? entryKey.toString('hex') : null,
             driveId,
-            source: typeof parsed.source === 'string' ? parsed.source : 'desktop',
-            encrypted: false,
-            announce: false
+            source: typeof entry?.source === 'string' ? entry.source : (typeof parsed.source === 'string' ? parsed.source : 'desktop'),
+            encrypted: entryKey ? encryptable : false,
+            announce: entryKey ? announceable : false
           })
         }
         return drives

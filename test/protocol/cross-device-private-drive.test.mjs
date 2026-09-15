@@ -1,7 +1,7 @@
 import { describe, it } from 'node:test'
 import assert from 'node:assert/strict'
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { mkdtemp, rm } from 'node:fs/promises'
-import { readdirSync, readFileSync, statSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import Hyperdrive from 'hyperdrive'
@@ -95,6 +95,75 @@ describe('Cross-device private drive (desktop to mobile)', () => {
     } catch {
       assert.equal(true, true)
     }
+  })
+
+  it('adopts a desktop v3 key export that lists entries as encrypted keyed drives', (t) => {
+    const root = mkdtempSync(join(tmpdir(), 'peersky-xdevice-'))
+    const mobileRestore = join(root, 'mobile')
+    const syncedStore = join(root, 'mobile-hyper-sdk')
+    mkdirSync(mobileRestore, { recursive: true })
+
+    const driveId = 'a'.repeat(64)
+    const key = 'b'.repeat(64)
+    writeFileSync(join(mobileRestore, 'private-drive-key.json'), JSON.stringify({
+      version: 3,
+      key,
+      driveId,
+      encrypted: true,
+      announce: true,
+      source: 'desktop',
+      entries: [{ driveId }]
+    }))
+    writeFileSync(join(mobileRestore, 'privateHyperdrives.json'), JSON.stringify([{
+      name: 'mydrive',
+      url: `hyper://${z32.encode(Buffer.from(driveId, 'hex')).toLowerCase()}/`,
+      timestamp: 1700000000000
+    }]))
+
+    const transferred = extractTransferredPrivateDrive(mobileRestore)
+    assert.equal(transferred.length, 1)
+    assert.equal(transferred[0].driveId, driveId)
+    assert.equal(transferred[0].key, key)
+    assert.equal(transferred[0].encrypted, true)
+    assert.equal(transferred[0].announce, true)
+
+    const adoption = adoptTransferredPrivateDrive(mobileRestore, syncedStore)
+    assert.equal(adoption.adopted, true)
+    assert.equal(adoption.driveId, driveId)
+    assert.equal(adoption.encrypted, true)
+
+    rmSync(root, { recursive: true, force: true })
+  })
+
+  it('adopts a desktop mobile-safe v3 key export carrying a top-level key and driveId', (t) => {
+    const root = mkdtempSync(join(tmpdir(), 'peersky-xdevice-'))
+    const mobileRestore = join(root, 'mobile')
+    const syncedStore = join(root, 'mobile-hyper-sdk')
+    mkdirSync(mobileRestore, { recursive: true })
+
+    const driveId = 'c'.repeat(64)
+    const key = 'd'.repeat(64)
+    writeFileSync(join(mobileRestore, 'private-drive-key.json'), JSON.stringify({
+      version: 3,
+      key,
+      driveId,
+      encrypted: true,
+      announce: true,
+      source: 'desktop'
+    }))
+
+    const transferred = extractTransferredPrivateDrive(mobileRestore)
+    assert.equal(transferred.length, 1)
+    assert.equal(transferred[0].driveId, driveId)
+    assert.equal(transferred[0].key, key)
+    assert.equal(transferred[0].encrypted, true)
+
+    const adoption = adoptTransferredPrivateDrive(mobileRestore, syncedStore)
+    assert.equal(adoption.adopted, true)
+    assert.equal(adoption.driveId, driveId)
+    assert.equal(adoption.encrypted, true)
+
+    rmSync(root, { recursive: true, force: true })
   })
 })
 
