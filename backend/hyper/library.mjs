@@ -13,7 +13,6 @@ import {
   withSyncedPrivateHyperRuntimeOperation
 } from './runtime.mjs'
 import { normalizeDriveAddressId } from './runtime-routing.mjs'
-import { parseHyperUrl } from './url.mjs'
 import { createHyperUrl, parseHyperUrl } from './url.mjs'
 import { recordHyperArchive } from './archive.mjs'
 import { resolveHyperdriveUploadTarget } from './storage-core.mjs'
@@ -37,8 +36,6 @@ export async function listHyperdriveLocation ({ url } = {}, options = {}) {
   try {
     return await runWithRuntime(options, async (runtime) => {
       const drive = await resolveDriveForAddress(runtime, target.driveAddress, options)
-      const entry = target.pathname === '/'
-      const drive = await runtime.getDrive(target.driveAddress)
       const explicitDirectory = target.pathname === '/' || target.pathname.endsWith('/')
       let refreshed = false
       const refreshDrive = async () => {

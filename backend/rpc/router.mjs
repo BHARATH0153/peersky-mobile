@@ -61,8 +61,6 @@ import { adoptTransferredPrivateDrive } from '../backup/private-drive-import.mjs
 import { randomBytes } from 'node:crypto'
 import b4a from 'b4a'
 import { rmSync, renameSync, existsSync } from 'bare-fs'
-import { restoreIdentityFromBackup } from '../backup/restore.mjs'
-import { rmSync } from 'bare-fs'
 import { commitIdentityRestore, restoreIdentityFromBackup } from '../backup/restore.mjs'
 
 import { createDrive, publishMarkdownDocument, readHyperFile, uploadHyperFile } from '../hyper/drive.mjs'
@@ -333,8 +331,6 @@ export async function routeRpcRequest (req) {
           privateDriveId: privateDriveAdoption.driveId || undefined,
           adoptedDriveIds: privateDriveAdoption.driveIds
         }
-      })
-        return { ok: true, requiresRestart: true }
       }, closeHyperOfflineDownloads)
       replyJson(req, result)
       return

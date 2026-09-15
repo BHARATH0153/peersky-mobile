@@ -53,10 +53,6 @@ let adoptedSdk = null
 let adoptedSdkOpening = null
 let adoptedStoragePath = null
 const syncedPrivateDrivesById = new Map()
-let privateSdk = null
-let privateSdkOpening = null
-let privateStoragePath = null
-let privateDriveId = null
 let networkRefresh = null
 const runtimeCoordinator = createRuntimeCoordinator()
 
@@ -326,9 +322,6 @@ export async function closeHyperRuntime () {
     deviceOnlyDriveId = null
     syncedPrivateDriveId = null
     resetPrivateDriveKeyCache()
-    privateSdk = null
-    privateSdkOpening = null
-    privateDriveId = null
     networkRefresh = null
     resetLANDiscovery()
   }

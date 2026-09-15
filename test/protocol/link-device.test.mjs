@@ -10,7 +10,6 @@ import z32 from 'z32'
 import { createMobilePairingCode } from '../../app/settings/identity-pairing.mjs'
 import { verifyIdentityTransferSignature } from '../../backend/backup/identity-transfer.mjs'
 import { extractTransferredPrivateDrive, adoptTransferredPrivateDrive } from '../../backend/backup/private-drive-import.mjs'
-import { restoreIdentityFromBackup } from '../../backend/backup/restore.mjs'
 import { resetPrivateDriveKeyCache } from '../../backend/hyper/private-keys.mjs'
 import { adoptedStoragePathFor } from '../../backend/hyper/runtime-routing.mjs'
 import { commitIdentityRestore, restoreIdentityFromBackup } from '../../backend/backup/restore.mjs'
@@ -494,6 +493,9 @@ describe('Link Device Identity Transfer', () => {
     } finally {
       rmSync(sourcePath, { recursive: true, force: true })
       rmSync(targetPath, { recursive: true, force: true })
+    }
+  })
+
   it('preserves device-local PeerChat state across repeated desktop identity restores', () => {
     const parent = mkdtempSync(join(tmpdir(), 'peersky-identity-swap-'))
     const storagePath = join(parent, 'current')
