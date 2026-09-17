@@ -66,6 +66,12 @@ export function matchesHyperdriveAddress (address, driveId) {
   return normalizedAddress !== null && normalizedAddress === normalizedDriveId
 }
 
+export function isAdoptedSyncedPrivateDrive (storage, driveId) {
+  if (!driveId) return false
+  const id = String(driveId).toLowerCase()
+  return readSyncedPrivateAdoptedDrives(storage).some((entry) => entry.driveId === id)
+}
+
 export function readSyncedPrivateAdoptedDrives (storage) {
   if (!storage) return []
   try {

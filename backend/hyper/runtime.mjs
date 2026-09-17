@@ -26,6 +26,7 @@ import {
   adoptedStoragePathFor,
   createPrivateHyperRuntimeOptions,
   createSyncedPrivateHyperRuntimeOptions,
+  isAdoptedSyncedPrivateDrive,
   matchesHyperdriveAddress,
   readSyncedPrivateAdoptedDrives
 } from './runtime-routing.mjs'
@@ -161,7 +162,15 @@ export async function getSyncedPrivateHyperdrive (runtime = null) {
     if (!driveId && !encryptionKey) throw new Error('Private drive encryption key is unavailable.')
 
     const announce = encryptionKey !== null && shouldAnnounceSyncedPrivateDrive(storage)
-    const corestore = target.namespace(HYPERDRIVE_PRIVATE_DRIVE_NAME)
+
+    // A linked desktop drive lives in the ADOPTED store (its cores were copied
+    // there by the identity transfer), so the phone's own open/publish path has
+    // to target that store too. Opening the driveId from the synced-private
+    // namespace would resolve to a placeholder core and silently drop writes.
+    const adoptedDrive = isAdoptedSyncedPrivateDrive(storage, driveId)
+    const corestore = adoptedDrive
+      ? (await getAdoptedPrivateHyperRuntime()).corestore
+      : target.namespace(HYPERDRIVE_PRIVATE_DRIVE_NAME)
     const driveOptions = encryptionKey ? { encryptionKey } : undefined
     const drive = new Hyperdrive(
       corestore,

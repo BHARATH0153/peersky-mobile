@@ -13,7 +13,7 @@ import {
   extractTransferredPrivateDrive
 } from '../../backend/backup/private-drive-import.mjs'
 import { HYPERDRIVE_PRIVATE_DRIVE_NAME } from '../../backend/hyper/storage-core.mjs'
-import { adoptedStoragePathFor } from '../../backend/hyper/runtime-routing.mjs'
+import { adoptedStoragePathFor, isAdoptedSyncedPrivateDrive } from '../../backend/hyper/runtime-routing.mjs'
 
 const SWARM_OFF = { bootstrap: [], port: 0 }
 
@@ -87,14 +87,10 @@ describe('Cross-device private drive (desktop to mobile)', () => {
     await buggy.ready()
     assert.equal(await buggy.get('/secret.txt'), null)
 
-    try {
-      await adoptedDrive.put('/from-mobile.txt', Buffer.from('written on mobile'))
-      await adoptedDrive.core.update()
-      const written = await adoptedDrive.get('/from-mobile.txt')
-      assert.equal(Buffer.from(written).toString(), 'written on mobile')
-    } catch {
-      assert.equal(true, true)
-    }
+    await adoptedDrive.put('/from-mobile.txt', Buffer.from('written on mobile'))
+    await adoptedDrive.core.update()
+    const written = await adoptedDrive.get('/from-mobile.txt')
+    assert.equal(Buffer.from(written).toString(), 'written on mobile')
   })
 
   it('adopts a desktop v3 key export that lists entries as encrypted keyed drives', (t) => {
@@ -164,6 +160,78 @@ describe('Cross-device private drive (desktop to mobile)', () => {
     assert.equal(adoption.encrypted, true)
 
     rmSync(root, { recursive: true, force: true })
+  })
+
+  it('routes the linked drive open to the adopted store and allows phone writes', async (t) => {
+    const root = await mkdtemp(join(tmpdir(), 'peersky-xdevice-'))
+    const desktopStore = join(root, 'desktop')
+    const mobileRestore = join(root, 'mobile')
+    const syncedStore = join(root, 'mobile-hyper-sdk')
+    const sdks = []
+    t.after(async () => {
+      await Promise.allSettled(sdks.map((sdk) => sdk.close()))
+      await rm(root, { recursive: true, force: true })
+    })
+
+    const encryptionKey = Buffer.alloc(32, 9)
+    const source = await createSDK({
+      storage: desktopStore,
+      swarmOpts: SWARM_OFF,
+      autoJoin: false,
+      doReplicate: false
+    })
+    sdks.push(source)
+
+    const sourceDrive = new Hyperdrive(source.namespace(HYPERDRIVE_PRIVATE_DRIVE_NAME), null, { encryptionKey })
+    await sourceDrive.ready()
+    await sourceDrive.put('/secret.txt', Buffer.from('sealed by desktop'))
+    const driveId = sourceDrive.core.key.toString('hex')
+    const driveZ32 = z32.encode(sourceDrive.core.key).toLowerCase()
+    await source.corestore.flush?.().catch(() => {})
+    await new Promise((resolve) => setTimeout(resolve, 300))
+    await source.close()
+
+    const registry = JSON.stringify([{
+      name: 'demo',
+      url: `hyper://${driveZ32}/`,
+      timestamp: 1700000000000,
+      encrypted: true
+    }])
+    await restoreIdentityFromBackup(createBackupZip(desktopStore, registry), mobileRestore)
+    writeFileSync(join(mobileRestore, 'private-drive-key.json'), JSON.stringify({
+      version: 3,
+      key: encryptionKey.toString('hex'),
+      driveId,
+      encrypted: true,
+      announce: true,
+      source: 'desktop'
+    }))
+
+    const adoption = adoptTransferredPrivateDrive(mobileRestore, syncedStore)
+    assert.equal(adoption.adopted, true)
+    assert.equal(adoption.driveId, driveId)
+    assert.equal(adoption.encrypted, true)
+    assert.equal(isAdoptedSyncedPrivateDrive(syncedStore, driveId), true)
+    assert.equal(isAdoptedSyncedPrivateDrive(syncedStore, 'f'.repeat(64)), false)
+
+    const adoptedStore = adoptedStoragePathFor(syncedStore)
+    const linked = await createSDK({
+      storage: adoptedStore,
+      corestoreOpts: { allowBackup: true },
+      swarmOpts: SWARM_OFF,
+      autoJoin: false,
+      doReplicate: false
+    })
+    sdks.push(linked)
+
+    // The phone's own open/publish path with adopted routing: the linked
+    // desktop drive opens from the adopted store where its cores live.
+    const linkedDrive = new Hyperdrive(linked.corestore, Buffer.from(driveId, 'hex'), { encryptionKey })
+    await linkedDrive.ready()
+    assert.equal(Buffer.from(await linkedDrive.get('/secret.txt')).toString(), 'sealed by desktop')
+    await linkedDrive.put('/upload.txt', Buffer.from('written on phone'))
+    await linkedDrive.core.update()
+    assert.equal(Buffer.from(await linkedDrive.get('/upload.txt')).toString(), 'written on phone')
   })
 })
 
