@@ -227,7 +227,7 @@ export function HyperdriveScreen ({ offlineNetworkAllowed, isDark, isLandscape, 
     if (busyAction) return
     Alert.alert(
       'Choose where to store the file',
-      'Public files can be shared, and anyone with one public link may browse other files in your public drive. Private files are locked and only this phone can read them. Linking devices so the key travels is coming. This device only keeps files on this phone and never syncs.',
+      'Public files can be shared, and anyone with one public link may browse other files in your public drive. Private files are encrypted and locked with a key that lives on this phone: sharing a link is safe, but only a device holding the key can open the drive. Paste an identity-transfer URL in Settings to adopt a drive published on the desktop browser; a phone-created keyed drive has no export path yet, so it stays on this phone. This device only keeps files on this phone and never syncs.',
       [
         { text: 'Cancel', style: 'cancel' },
         { text: 'Private', onPress: () => void uploadFile('private') },
@@ -774,7 +774,7 @@ function formatRecentMeta (item: HyperdriveItem) {
 
 function getUploadSuccessMessage (visibility: UploadVisibility, item: HyperdriveItem) {
   if (visibility === 'device') return 'Stored on this device only. It never syncs and will be lost if this phone is reset.'
-  if (visibility === 'private') return 'Locked on this phone. Only this device can read it until device linking is enabled.'
+  if (visibility === 'private') return 'Encrypted with a key held on this phone. The link alone is safe to share, but only a device holding the key can open the drive.'
   return item.url
 }
 

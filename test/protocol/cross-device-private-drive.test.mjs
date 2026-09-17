@@ -13,7 +13,7 @@ import {
   extractTransferredPrivateDrive
 } from '../../backend/backup/private-drive-import.mjs'
 import { HYPERDRIVE_PRIVATE_DRIVE_NAME } from '../../backend/hyper/storage-core.mjs'
-import { adoptedStoragePathFor, isAdoptedSyncedPrivateDrive } from '../../backend/hyper/runtime-routing.mjs'
+import { adoptedStoragePathFor, isAdoptedSyncedPrivateDrive, readSyncedPrivateAdoptedDrives } from '../../backend/hyper/runtime-routing.mjs'
 
 const SWARM_OFF = { bootstrap: [], port: 0 }
 
@@ -63,6 +63,12 @@ describe('Cross-device private drive (desktop to mobile)', () => {
     assert.equal(adoption.driveId, driveId)
     assert.equal(adoption.encrypted, false)
     assert.deepEqual(adoption.driveIds, [driveId])
+
+    const adoptedDrives = readSyncedPrivateAdoptedDrives(syncedStore)
+    assert.equal(adoptedDrives.length, 1)
+    assert.equal(adoptedDrives[0].driveId, driveId)
+    assert.equal(adoptedDrives[0].encrypted, false)
+    assert.equal(adoptedDrives[0].announce, false)
 
     // Adopted stores live in their own directory (hyper-sdk-adopted), never
     // overlaid onto the phone's synced-private store. The adopted drive must
@@ -232,6 +238,40 @@ describe('Cross-device private drive (desktop to mobile)', () => {
     await linkedDrive.put('/upload.txt', Buffer.from('written on phone'))
     await linkedDrive.core.update()
     assert.equal(Buffer.from(await linkedDrive.get('/upload.txt')).toString(), 'written on phone')
+  })
+
+  it('adopts every desktop private registry entry, not just the newest', (t) => {
+    const root = mkdtempSync(join(tmpdir(), 'peersky-xdevice-'))
+    const mobileRestore = join(root, 'mobile')
+    const syncedStore = join(root, 'mobile-hyper-sdk')
+    mkdirSync(mobileRestore, { recursive: true })
+
+    const names = ['one', 'two', 'three']
+    const registry = names.map((name, index) => ({
+      name,
+      url: `hyper://${z32.encode(Buffer.alloc(32, index + 1)).toLowerCase()}/`,
+      timestamp: 1700000000000 + index
+    }))
+    writeFileSync(join(mobileRestore, 'privateHyperdrives.json'), JSON.stringify(registry))
+
+    const transferred = extractTransferredPrivateDrive(mobileRestore)
+    assert.equal(transferred.length, names.length)
+
+    const adoption = adoptTransferredPrivateDrive(mobileRestore, syncedStore)
+    assert.equal(adoption.adopted, true)
+    assert.equal(adoption.encrypted, false)
+    assert.equal(adoption.driveIds.length, names.length)
+    assert.deepEqual(
+      adoption.driveIds.sort(),
+      registry.map((entry) => Buffer.from(z32.decode(new URL(entry.url).hostname)).toString('hex')).sort()
+    )
+
+    const adoptedDrives = readSyncedPrivateAdoptedDrives(syncedStore)
+    assert.equal(adoptedDrives.length, names.length)
+    assert.equal(adoptedDrives.every((entry) => entry.encrypted === false), true)
+    assert.equal(adoptedDrives.every((entry) => entry.announce === false), true)
+
+    rmSync(root, { recursive: true, force: true })
   })
 })
 
