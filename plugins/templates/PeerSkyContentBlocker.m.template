@@ -4,6 +4,19 @@ static NSString *const PeerSkyContentBlockerDomain = @"PeerSkyContentBlocker";
 static NSString *const PeerSkyYoutubeRuleIdentifier = @"peersky-youtube-ad-break-v3";
 static const unsigned long long MaxRuleFileBytes = 48ULL * 1024ULL * 1024ULL;
 
+// WKContentRuleListStore initializes WebKit on first touch, and WebKit must be
+// brought up on the main thread. React Native calls into this class from the
+// TurboModule queue, so every store access is funnelled through here. Without
+// it the first call traps in WebKit::runInitializationCode.
+static void PeerSkyRunOnMain(dispatch_block_t block)
+{
+  if ([NSThread isMainThread]) {
+    block();
+  } else {
+    dispatch_async(dispatch_get_main_queue(), block);
+  }
+}
+
 @interface PeerSkyContentBlocker ()
 @property (nonatomic, copy) NSArray<WKContentRuleList *> *ruleLists;
 @property (nonatomic, assign) BOOL enabled;
@@ -71,6 +84,7 @@ static const unsigned long long MaxRuleFileBytes = 48ULL * 1024ULL * 1024ULL;
 - (void)removeStaleRuleListsKeepingSnapshot:(NSString *)snapshotName
 {
   NSString *activePrefix = [NSString stringWithFormat:@"peersky-%@-", snapshotName];
+  PeerSkyRunOnMain(^{
   WKContentRuleListStore *store = [WKContentRuleListStore defaultStore];
   [store getAvailableContentRuleListIdentifiers:^(NSArray<NSString *> *identifiers) {
     for (NSString *identifier in identifiers) {
@@ -81,6 +95,7 @@ static const unsigned long long MaxRuleFileBytes = 48ULL * 1024ULL * 1024ULL;
       }
     }
   }];
+  });
 }
 
 - (void)configureWebView:(WKWebViewConfiguration *)configuration
@@ -108,6 +123,7 @@ static const unsigned long long MaxRuleFileBytes = 48ULL * 1024ULL * 1024ULL;
 
 - (void)loadYoutubeRule:(void (^)(WKContentRuleList * _Nullable ruleList, NSError * _Nullable error))completion
 {
+  PeerSkyRunOnMain(^{
   WKContentRuleListStore *store = [WKContentRuleListStore defaultStore];
   NSString *identifier = PeerSkyYoutubeRuleIdentifier;
   [store lookUpContentRuleListForIdentifier:identifier completionHandler:^(WKContentRuleList *cached, NSError *lookupError) {
@@ -120,6 +136,7 @@ static const unsigned long long MaxRuleFileBytes = 48ULL * 1024ULL * 1024ULL;
                         encodedContentRuleList:json
                              completionHandler:completion];
   }];
+  });
 }
 
 - (void)ensureYoutubeRuleLoaded
@@ -147,6 +164,7 @@ static const unsigned long long MaxRuleFileBytes = 48ULL * 1024ULL * 1024ULL;
   }
 
   NSString *identifier = [NSString stringWithFormat:@"peersky-%@-%lu", snapshotName, (unsigned long)index];
+  PeerSkyRunOnMain(^{
   WKContentRuleListStore *store = [WKContentRuleListStore defaultStore];
   [store lookUpContentRuleListForIdentifier:identifier completionHandler:^(WKContentRuleList *cached, NSError *lookupError) {
     if (cached) {
@@ -176,7 +194,20 @@ static const unsigned long long MaxRuleFileBytes = 48ULL * 1024ULL * 1024ULL;
                         encodedContentRuleList:json
                              completionHandler:^(WKContentRuleList *ruleList, NSError *compileError) {
         if (!ruleList || compileError) {
-          completion(compileError ?: [self error:@"Unable to compile WebKit content rules."]);
+          // WebKit puts the real reason in userInfo; the bare NSError description
+          // is just "WKErrorDomain error 6", which says nothing about which rule
+          // or limit was rejected.
+          NSString *detail = compileError.userInfo[NSHelpAnchorErrorKey]
+            ?: compileError.userInfo[NSLocalizedDescriptionKey]
+            ?: compileError.userInfo[NSDebugDescriptionErrorKey]
+            ?: compileError.localizedFailureReason;
+          NSString *message = [NSString stringWithFormat:
+            @"Unable to compile WebKit content rules for %@ (code %ld)%@%@",
+            identifier,
+            (long)compileError.code,
+            detail.length ? @": " : @"",
+            detail.length ? detail : @""];
+          completion([self error:message]);
           return;
         }
         [result addObject:ruleList];
@@ -184,6 +215,7 @@ static const unsigned long long MaxRuleFileBytes = 48ULL * 1024ULL * 1024ULL;
       }];
     });
   }];
+  });
 }
 
 - (NSError *)error:(NSString *)message
