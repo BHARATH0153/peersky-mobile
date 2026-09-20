@@ -77,6 +77,18 @@ Open **Settings > P2P Data > Offline Hyper folders** to view retained folders,
 their status, and their locally stored size when available. From this page a
 download can be paused, resumed, or removed.
 
+## Private drives
+
+Hyperdrive uploads support three visibility modes:
+
+- **Public** — written to the announced `hyperdrive-public` drive. Anyone with the URL can read it and browse the rest of that drive.
+- **Private** — written to the `hyperdrive-private` drive, encrypted at the block level using a 32-byte `encryptionKey` (`hyperdrive@13.3.3` passes it to `hypercore@11.35.2`, which does block encryption). The drive is announced and replicated (the synced store runs `autoJoin: false`, `doReplicate: true`), so it moves wherever the key goes. An uploaded drive can only be opened on a device that holds its key, so on a fresh install a Private upload is effectively local to this phone until another device adopts the key. The key is generated on first use and persisted in `private-drive-key.json` beside the synced private storage (`hyper-sdk-synced-private`); an identity transfer from the desktop browser ships the same file so the phone can adopt and write drives the desktop published.
+- **This device only** — written to the isolated `hyperdrive-device` drive with discovery and replication disabled (`autoJoin: false`, `doReplicate: false`). It never leaves the phone, so it is the right choice when nothing should leave the device at all.
+
+> [!NOTE]
+> Key distribution is one-way today: the desktop browser can publish a private drive and ship its key in an identity transfer, and the phone adopts that drive into its synced store (making it writable here). The phone has no export path for its own key, so a drive whose key only exists on this phone cannot be opened on the desktop browser yet. To link a desktop-published drive, paste the identity transfer URL into **Settings &gt; Identity transfer URL**.
+
+## Developer notes
 **Clear all P2P data** is broader than **Remove offline**. It closes active P2P
 runtimes and removes local Hyper and PeerChat data from the device.
 

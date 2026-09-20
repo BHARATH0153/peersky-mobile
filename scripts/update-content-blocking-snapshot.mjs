@@ -1,4 +1,5 @@
 import { copyFile, mkdir, rename, rm, writeFile } from 'node:fs/promises'
+import { request as httpsRequest } from 'node:https'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -87,63 +88,134 @@ async function downloadBoundedList (source) {
 }
 
 async function downloadBoundedListOnce (source) {
-  const controller = new AbortController()
-  const timeout = setTimeout(() => controller.abort(), timeoutMs)
+  const bytes = await downloadListUrl(source.url, {
+    title: source.title,
+    timeoutMs,
+    maxBytes: MAX_FILTER_LIST_BYTES,
+    maxRedirects: 5
+  })
 
-  try {
-    const response = await fetch(source.url, {
+  const validation = validateFilterListSnapshot({
+    id: source.id,
+    byteLength: bytes.byteLength,
+    preamble: bytes.subarray(0, 512).toString('latin1')
+  })
+  if (!validation.ok) throw permanentError(`${source.title}: ${validation.error}`)
+  return bytes
+}
+
+function downloadListUrl (url, { title, timeoutMs, maxBytes, maxRedirects, maxRedirectsRemaining }) {
+  const remaining = maxRedirectsRemaining === undefined ? maxRedirects : maxRedirectsRemaining
+
+  return new Promise((resolve, reject) => {
+    let target
+    try {
+      target = new URL(url)
+    } catch {
+      reject(new Error(`${title} has an invalid download URL.`))
+      return
+    }
+    if (target.protocol !== 'https:' || target.username || target.password) {
+      reject(permanentError(`${title} resolved to an unsafe URL.`))
+      return
+    }
+
+    const request = httpsRequest(target, {
       headers: {
         Accept: 'text/plain',
         'User-Agent': 'PeerSky-Mobile-Content-Blocking-Build/1.0'
-      },
-      signal: controller.signal
-    })
-    if (!response.ok) {
-      const error = new Error(`${source.title} returned HTTP ${response.status}.`)
-      error.retryable = response.status === 403 ||
-        response.status === 408 ||
-        response.status === 425 ||
-        response.status === 429 ||
-        response.status >= 500
-      error.retryAfterMs = readRetryAfterMs(response.headers.get('retry-after'))
-      throw error
-    }
-    const responseUrl = new URL(response.url)
-    if (responseUrl.protocol !== 'https:' || responseUrl.username || responseUrl.password) {
-      throw permanentError(`${source.title} redirected to an unsafe URL.`)
-    }
-
-    const declaredLength = Number(response.headers.get('content-length'))
-    if (Number.isFinite(declaredLength) && declaredLength > MAX_FILTER_LIST_BYTES) {
-      throw permanentError(`${source.title} exceeds the size limit.`)
-    }
-
-    const reader = response.body?.getReader()
-    if (!reader) throw new Error(`${source.title} did not return a readable body.`)
-    const chunks = []
-    let byteLength = 0
-    while (true) {
-      const { done, value } = await reader.read()
-      if (done) break
-      byteLength += value.byteLength
-      if (byteLength > MAX_FILTER_LIST_BYTES) {
-        await reader.cancel()
-        throw permanentError(`${source.title} exceeds the size limit.`)
       }
-      chunks.push(value)
+    })
+
+    let settled = false
+    const fail = (error) => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      if (error?.retryable === undefined) error.retryable = true
+      reject(error)
+    }
+    const finish = (bytes) => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      resolve(bytes)
     }
 
-    const bytes = Buffer.concat(chunks, byteLength)
-    const validation = validateFilterListSnapshot({
-      id: source.id,
-      byteLength,
-      preamble: bytes.subarray(0, 512).toString('latin1')
+    const timer = setTimeout(() => {
+      request.destroy(new Error(`${title} timed out after ${timeoutMs}ms.`))
+    }, timeoutMs)
+
+    request.once('error', fail)
+    request.once('response', (response) => {
+      clearTimeout(timer)
+
+      if (response.statusCode >= 300 && response.statusCode < 400) {
+        response.resume()
+        const location = response.headers.location
+        response.destroy()
+        if (remaining <= 0) {
+          fail(permanentError(`${title} redirected too many times.`))
+          return
+        }
+        if (!location) {
+          fail(permanentError(`${title} redirected without a location header.`))
+          return
+        }
+        let redirected
+        try {
+          redirected = new URL(location, target).toString()
+        } catch {
+          fail(permanentError(`${title} redirected to an invalid URL.`))
+          return
+        }
+        resolve(downloadListUrl(redirected, { title, timeoutMs, maxBytes, maxRedirects, maxRedirectsRemaining: remaining - 1 }))
+        return
+      }
+
+      if (response.statusCode < 200 || response.statusCode >= 300) {
+        response.resume()
+        const status = response.statusCode
+        const error = new Error(`${title} returned HTTP ${status}.`)
+        error.retryable = status === 403 ||
+          status === 408 ||
+          status === 425 ||
+          status === 429 ||
+          status >= 500
+        error.retryAfterMs = readRetryAfterMs(firstHeader(response.headers['retry-after']))
+        response.destroy()
+        fail(error)
+        return
+      }
+
+      const declaredLength = Number(response.headers['content-length'])
+      if (Number.isFinite(declaredLength) && declaredLength > maxBytes) {
+        response.destroy()
+        fail(permanentError(`${title} exceeds the size limit.`))
+        return
+      }
+
+      const chunks = []
+      let byteLength = 0
+      response.on('data', (chunk) => {
+        byteLength += chunk.byteLength
+        if (byteLength > maxBytes) {
+          response.destroy()
+          fail(permanentError(`${title} exceeds the size limit.`))
+          return
+        }
+        chunks.push(chunk)
+      })
+      response.once('end', () => finish(Buffer.concat(chunks, byteLength)))
+      response.once('error', fail)
     })
-    if (!validation.ok) throw permanentError(`${source.title}: ${validation.error}`)
-    return bytes
-  } finally {
-    clearTimeout(timeout)
-  }
+
+    request.end()
+  })
+}
+
+function firstHeader (value) {
+  return Array.isArray(value) ? value[0] : value
 }
 
 function permanentError (message) {

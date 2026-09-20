@@ -48,7 +48,7 @@ const hyperdriveIcon = require('../../assets/images/hyperdrive.png')
 
 type RecentSource = 'fetched' | 'uploaded'
 type RecentFilter = 'all' | RecentSource
-type UploadVisibility = 'public' | 'private'
+type UploadVisibility = 'public' | 'private' | 'device'
 
 type HyperdriveItem = {
   type: 'directory' | 'file'
@@ -226,11 +226,12 @@ export function HyperdriveScreen ({ offlineNetworkAllowed, isDark, isLandscape, 
   function chooseUploadVisibility () {
     if (busyAction) return
     Alert.alert(
-      'Choose upload visibility',
-      'Public files can be shared, and anyone with one public link may browse other files in your public drive. Private files stay on this device.',
+      'Choose where to store the file',
+      'Public files can be shared, and anyone with one public link may browse other files in your public drive. Private files are encrypted and locked with a key that lives on this phone: sharing a link is safe, but only a device holding the key can open the drive. Paste an identity-transfer URL in Settings to adopt a drive published on the desktop browser; a phone-created keyed drive has no export path yet, so it stays on this phone. This device only keeps files on this phone and never syncs.',
       [
         { text: 'Cancel', style: 'cancel' },
         { text: 'Private', onPress: () => void uploadFile('private') },
+        { text: 'This device only', onPress: () => void uploadFile('device') },
         { text: 'Public', onPress: () => void uploadFile('public') }
       ]
     )
@@ -263,9 +264,7 @@ export function HyperdriveScreen ({ offlineNetworkAllowed, isDark, isLandscape, 
       const uploadedItem = { ...response.item, localUri: file.uri }
       remember(uploadedItem, 'uploaded')
       onStatus(`Uploaded ${response.item.name}`)
-      const uploadMessage = visibility === 'private'
-        ? 'Stored privately on this device.'
-        : response.item.url
+      const uploadMessage = getUploadSuccessMessage(visibility, response.item)
       Alert.alert('Uploaded to Hyperdrive', uploadMessage, [
         { text: 'Done' },
         { text: 'Open', onPress: () => onOpenItem(uploadedItem) }
@@ -412,7 +411,7 @@ export function HyperdriveScreen ({ offlineNetworkAllowed, isDark, isLandscape, 
             style={item.visibility === 'private' ? styles.privateItemChevron : undefined}
           />
         </Pressable>
-        {item.visibility !== 'private' && (
+        {item.visibility !== 'private' && item.visibility !== 'device' && (
           <Pressable
             accessibilityLabel={`Copy ${item.name} Hyper URL`}
             accessibilityRole='button'
@@ -766,10 +765,17 @@ function formatRecentMeta (item: HyperdriveItem) {
   const source = item.source === 'uploaded' ? 'Uploaded' : 'Fetched'
   const visibility = item.visibility === 'private'
     ? 'Private'
-    : item.visibility === 'public' ? 'Public' : null
+    : item.visibility === 'public' ? 'Public'
+      : item.visibility === 'device' ? 'This device only' : null
   const details = visibility ? `${source} - ${visibility}` : source
   if (!item.openedAt) return details
   return `${details} - ${new Date(item.openedAt).toLocaleDateString()}`
+}
+
+function getUploadSuccessMessage (visibility: UploadVisibility, item: HyperdriveItem) {
+  if (visibility === 'device') return 'Stored on this device only. It never syncs and will be lost if this phone is reset.'
+  if (visibility === 'private') return 'Encrypted with a key held on this phone. The link alone is safe to share, but only a device holding the key can open the drive.'
+  return item.url
 }
 
 function formatBytes (bytes: number) {
