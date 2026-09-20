@@ -211,7 +211,7 @@ function createUrlFilter (pattern) {
   let suffix = ''
 
   if (value.startsWith('||')) {
-    prefix = '^[a-z][a-z0-9+.-]*://(?:[^/?#]*\\.)?'
+    prefix = '^[a-z][a-z0-9+.-]*://([^/?#]*\\.)?'
     value = value.slice(2)
   } else if (value.startsWith('|')) {
     prefix = '^'
@@ -222,18 +222,29 @@ function createUrlFilter (pattern) {
     value = value.slice(0, -1)
   }
 
+  // WebKit's url-filter has no alternation at all: any "|" fails to compile with
+  // "Disjunctions are not supported yet". The Adblock separator "^" means "a
+  // separator character or the end of the URL", which needs alternation to say
+  // exactly, so approximate it: a trailing separator is dropped (the end of the
+  // pattern already implies the end of the URL) and anywhere else it becomes the
+  // separator character class on its own.
+  const characters = [...value]
   let converted = ''
-  for (const character of value) {
+  for (let index = 0; index < characters.length; index++) {
+    const character = characters[index]
     if (character === '*') converted += '.*'
-    else if (character === '^') converted += '(?:[^A-Za-z0-9_.%-]|$)'
-    else converted += escapeRegex(character)
+    else if (character === '^') {
+      if (index < characters.length - 1) converted += '[^A-Za-z0-9_.%-]'
+    } else converted += escapeRegex(character)
   }
 
   return converted ? `${prefix}${converted}${suffix}` : null
 }
 
 function escapeRegex (character) {
-  return /[\\^$.*+?()[\]{}|/]/.test(character) ? `\\${character}` : character
+  // Only escape what WebKit treats as special. "/" and "{}" are literals there,
+  // and escaping them fails compilation.
+  return /[\\^$.*+?()[\]|]/.test(character) ? `\\${character}` : character
 }
 
 function validateBatchOptions (maxRules, batchSize, yieldControl) {
