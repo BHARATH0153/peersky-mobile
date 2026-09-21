@@ -18,6 +18,13 @@ const MAX_JSON_BODY_BYTES = 4 * 1024 * 1024
 // Enough of an upstream failure to name the cause, not enough to be a payload.
 const MAX_UPSTREAM_ERROR_BYTES = 8 * 1024
 
+// A folder listing reads one block per entry, so a cold folder of tracks needs
+// far more reads than a drive root and is the one that trips the 5s per-read
+// timeout. Each attempt keeps the blocks it did manage to fetch, so retrying
+// makes real progress rather than just rolling the dice again.
+const LISTING_ATTEMPTS = 3
+const LISTING_RETRY_DELAY_MS = 400
+
 // Content types the proxy will hand back as-is. Everything else is forced to
 // application/octet-stream, because a hyper drive is untrusted input and the
 // PeerTunes origin is fixed and holds the user's library.
@@ -221,17 +228,8 @@ async function serveHyperAsset (req, res, { fetch, fetchRange, ensureGlobals, ke
   // Folder listings and playlist manifests are small documents. Forwarding
   // Accept lets hypercore-fetch answer a folder with its JSON listing.
   if (wantsJson(req)) {
-    const response = await fetch(assetUrl, { headers: { accept: 'application/json' } })
-    if (!response.ok) {
-      // hypercore-fetch puts the real reason in the body: a read timeout, a
-      // missing block, an empty folder. Throwing away the body left every
-      // failure looking like "can't reach that URL", which is unusable when a
-      // folder fails on one device and works on another.
-      throw createHttpError(
-        response.status || 502,
-        await describeUpstreamFailure(response)
-      )
-    }
+    const response = await fetchListing(fetch, assetUrl, req, res)
+    if (!response) return
 
     const headers = headersToObject(response.headers)
     const declaredLength = Number.parseInt(headers['content-length'] || '', 10)
@@ -427,6 +425,34 @@ function guardProxyResponse (res) {
 function safeProxyContentType (value) {
   const contentType = String(value || '')
   return PROXYABLE_CONTENT_TYPES.test(contentType) ? contentType : 'application/octet-stream'
+}
+
+async function fetchListing (fetch, assetUrl, req, res) {
+  let failure = null
+
+  for (let attempt = 0; attempt < LISTING_ATTEMPTS; attempt++) {
+    if (req.aborted || res.destroyed) return null
+
+    const response = await fetch(assetUrl, { headers: { accept: 'application/json' } })
+    if (response.ok) return response
+
+    // hypercore-fetch puts the real reason in the body: a read timeout, a
+    // missing block, an empty folder. Throwing that away left every failure
+    // looking like "can't reach that URL", which is unusable when a folder
+    // fails on one device and works on another.
+    failure = createHttpError(response.status || 502, await describeUpstreamFailure(response))
+
+    // A 404 is an answer, not a hiccup. Only slow or incomplete reads are
+    // worth another go.
+    if (response.status === 404) break
+    if (attempt < LISTING_ATTEMPTS - 1) await delay(LISTING_RETRY_DELAY_MS)
+  }
+
+  throw failure
+}
+
+function delay (ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms))
 }
 
 async function describeUpstreamFailure (response) {

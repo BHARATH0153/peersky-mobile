@@ -289,6 +289,27 @@ describe('PeerTunes loopback server with injectable Node server', () => {
     assert.match(body, /REQUEST_TIMEOUT/)
   })
 
+  it('retries a listing that was only slow, and gives up on a real 404', async () => {
+    // Each attempt keeps whatever blocks it fetched, so a cold folder warms up
+    // rather than failing outright. This is the Android "/Classic/ fails but /
+    // works" shape: the root needs far fewer reads than a folder of tracks.
+    const response = await fetch(`${localUrl}/hyper/asset?url=${encodeURIComponent('hyper://abc/flaky/')}`, {
+      headers: { accept: 'application/json' }
+    })
+
+    assert.equal(response.status, 200)
+    assert.deepEqual(await response.json(), ['Warmed.mp3'])
+    assert.equal(fetchCalls.filter((call) => call.url === 'hyper://abc/flaky/').length, 3)
+
+    // A 404 is an answer, not a hiccup, so it must not be retried.
+    fetchCalls.length = 0
+    const missing = await fetch(`${localUrl}/hyper/asset?url=${encodeURIComponent('hyper://abc/missing/')}`, {
+      headers: { accept: 'application/json' }
+    })
+    assert.equal(missing.status, 404)
+    assert.equal(fetchCalls.length, 1)
+  })
+
   it('pins an imported folder for offline as soon as its listing is served', async () => {
     // Importing a playlist is exactly this request, so this is the moment the
     // tracks get kept. An offline music app that only streams is not offline.
@@ -420,6 +441,27 @@ function createFakeHyperFetch (calls) {
           'content-length': String(bytes.byteLength)
         }),
         body: (async function * () { yield bytes })()
+      }
+    }
+
+    if (url === 'hyper://abc/flaky/') {
+      // Fails twice, then succeeds: the shape of a cold folder warming up.
+      const attempt = calls.filter((call) => call.url === url).length
+      if (attempt < 3) {
+        return {
+          ok: false,
+          status: 500,
+          statusText: 'Internal Error',
+          headers: new Headers(),
+          body: (async function * () { yield new TextEncoder().encode('REQUEST_TIMEOUT') })()
+        }
+      }
+      return {
+        ok: true,
+        status: 200,
+        statusText: 'OK',
+        headers: new Headers({ 'content-type': 'application/json; charset=utf-8' }),
+        text: async () => JSON.stringify(['Warmed.mp3'])
       }
     }
 
