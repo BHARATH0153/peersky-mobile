@@ -1140,7 +1140,7 @@
           ];
           if (phone) uploads.reverse();
           return [
-            { label: "Open URL…", sub: "hyper:// ipfs:// https://", chevron: true, action: () => ui.push(ui.urlScreen()) },
+            { label: "Open URL…", sub: "hyper:// https://", chevron: true, action: () => ui.push(ui.urlScreen()) },
             ...uploads,
             { label: "Share Library…", action: () => ui.shareLibrary() },
           { label: "Rescan Sources", value: String(ui.lib.sources.length), action: () => ui.runImport(() => ui.lib.rescan(), "Rescanning") },
@@ -1245,7 +1245,7 @@
             <div class="cap">Load music from a URL</div>
             <input type="url" spellcheck="false" autocapitalize="off" autocomplete="off" placeholder="hyper://…">
             <button type="button" class="urlscan">${PT.icons.qr}<span>Scan QR Code</span></button>
-            <div class="hint">Point it at a hyper:// drive folder with songs, an ipfs:// folder, or a direct audio link. Press the center button or Enter to sync.</div>`;
+            <div class="hint">Point it at a hyper:// drive folder with songs, or a direct audio link. Press the center button or Enter to sync.</div>`;
           page.appendChild(box);
           this.input = box.querySelector("input");
           this.input.addEventListener("keydown", (e) => {
@@ -1400,17 +1400,15 @@
         failed = err || new Error("sync failed");
       }
       if (failed) {
-        const schemeMatch = /^(hyper|ipfs|ipns):/i.exec(failed.url || "");
+        const schemeMatch = /^(hyper):/i.exec(failed.url || "");
         const p2p = !!schemeMatch;
         const scheme = schemeMatch ? schemeMatch[1].toLowerCase() : "";
         if (failed.code === "UNREACHABLE" && p2p) {
-          // a page already on a p2p protocol clearly has hyper support
-          const inP2p = /^(hyper|ipfs|ipns|peersky):$/i.test(location.protocol);
+          // PeerTunes only ever runs inside PeerSky, which does speak hyper://,
+          // so an unreachable drive means nobody is seeding it right now.
           this.dialog({
             msg: "Can't reach that URL",
-            sub: inP2p
-              ? `Nothing answered on ${scheme}://. The source may not be seeded, or this build may not carry a ${scheme}:// handler.`
-              : `This browser does not speak ${scheme}://. Open PeerTunes inside PeerSky, or use an http link here.`,
+            sub: `Nothing answered on ${scheme}://. Nobody may be seeding it right now, or the link may be wrong.`,
             buttons: [{ label: "OK" }],
           });
         } else if (failed.code === "EMPTY") {

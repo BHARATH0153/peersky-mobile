@@ -105,7 +105,7 @@
   // What a scanned QR code may legitimately contain: a music source, or a
   // PeerTunes share link carrying one. Anything else is rejected rather than
   // handed to fetch, since a QR code is untrusted input.
-  const SCANNABLE_SCHEME = /^(hyper|ipfs|ipns|https?):\/\//i;
+  const SCANNABLE_SCHEME = /^(hyper|https?):\/\//i;
   const MAX_SCANNED_URL_LENGTH = 4096;
 
   function readScannedUrl(text) {
@@ -278,7 +278,7 @@
                 // a p2p url we cannot even probe will not play either, so
                 // do not fake-add it. http stays lenient: fetch can be
                 // cors-blocked while the audio element still plays fine.
-                if (/^(hyper|ipfs|ipns):\/\//i.test(job.url)) {
+                if (/^hyper:\/\//i.test(job.url)) {
                   unreachable++;
                   console.warn("url unreachable:", job.url, err);
                   this._emitProgress(++done, total, decodeSafe(job.url.split("/").pop() || ""));
@@ -398,7 +398,7 @@
               tags = await PT.readTags(await PT.urlSource(job.u));
             } catch (err) {
               // same rule as importing: skip p2p urls we cannot reach at all
-              if (/^(hyper|ipfs|ipns):\/\//i.test(job.u)) {
+              if (/^hyper:\/\//i.test(job.u)) {
                 console.warn("url unreachable:", job.u, err);
                 this._emitProgress(++done, files.length, decodeSafe(job.u.split("/").pop() || ""));
                 continue;

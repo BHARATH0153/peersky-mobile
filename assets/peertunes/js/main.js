@@ -197,7 +197,7 @@
       while ((m = re.exec(s || ""))) {
         try {
           const u = decodeURIComponent(m[1]);
-          if (/^(hyper|ipfs|ipns|https?):\/\//i.test(u) && !out.includes(u)) out.push(u);
+          if (/^(hyper|https?):\/\//i.test(u) && !out.includes(u)) out.push(u);
         } catch {}
       }
     }
