@@ -399,6 +399,7 @@ export default function App () {
   const [peertunesUrl, setPeertunesUrl] = useState<string | null>(null)
   const [peertunesLaunchSuffix, setPeertunesLaunchSuffix] = useState('')
   const [peertunesError, setPeertunesError] = useState<string | null>(null)
+  const [peertunesMounted, setPeertunesMounted] = useState(false)
   const [p2pmdRoom, setP2pmdRoom] = useState<P2pmdRoom | null>(null)
   const [p2pmdEditorHtml, setP2pmdEditorHtml] = useState<string | null>(null)
   const [p2pmdJoinKey, setP2pmdJoinKey] = useState('')
@@ -1093,6 +1094,7 @@ export default function App () {
     }
 
     if (app === 'peertunes') {
+      setPeertunesMounted(true)
       setPeertunesLaunchSuffix(launchSuffix)
       void ensurePeerTunesServer()
     }
@@ -1292,6 +1294,7 @@ export default function App () {
     if (entry.source.kind === 'app') {
       setActiveTab(entry.source.app)
       if (entry.source.app === 'peertunes') {
+        setPeertunesMounted(true)
         setPeertunesLaunchSuffix(getRuntimeAppLaunchSuffix(entry.url))
       }
     } else {
@@ -2883,17 +2886,9 @@ export default function App () {
                 />
                 )
               : activeTab === 'peertunes'
-                ? (
-                  <PeerTunesScreen
-                    error={peertunesError}
-                    isDark={browserIsDark}
-                    launchSuffix={peertunesLaunchSuffix}
-                    localUrl={peertunesUrl}
-                    onEnsureServer={() => void ensurePeerTunesServer()}
-                    onOpenUrl={(targetUrl) => void loadBrowserUrl(targetUrl)}
-                    onStatus={setStatus}
-                  />
-                  )
+                // PeerTunes lives in the persistent layer below so music keeps
+                // playing when the user switches tabs. Nothing to draw here.
+                ? null
                 : (
               <ScrollView
                 style={[
@@ -3176,6 +3171,28 @@ export default function App () {
               </View>
               )
             : null}
+
+        {peertunesMounted && (
+          <View
+            pointerEvents={activeTab === 'peertunes' && browserSource.kind === 'app' ? 'auto' : 'none'}
+            style={[
+              styles.browserWebViewLayer,
+              activeTab === 'peertunes' && browserSource.kind === 'app'
+                ? null
+                : styles.browserWebViewLayerHidden
+            ]}
+          >
+            <PeerTunesScreen
+              error={peertunesError}
+              isDark={browserIsDark}
+              launchSuffix={peertunesLaunchSuffix}
+              localUrl={peertunesUrl}
+              onEnsureServer={() => void ensurePeerTunesServer()}
+              onOpenUrl={(targetUrl) => void loadBrowserUrl(targetUrl)}
+              onStatus={setStatus}
+            />
+          </View>
+        )}
 
         {browserTabsState.tabs.map((tab) => {
           if (!contentBlockingReady) return null
