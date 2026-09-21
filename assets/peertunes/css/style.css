@@ -64,7 +64,12 @@ body {
 }
 
 .stage {
-  min-height: 100vh;
+  /* 100vh is the window, not this element. Inside the app the WebView sits
+     under a toolbar and above the system bars, so a 100vh stage overflowed and
+     overflow:hidden clipped the wheel off the bottom. 100% tracks the box we
+     actually get. */
+  height: 100%;
+  min-height: 100%;
   display: grid;
   place-items: center;
   padding: 2vh 0;
@@ -76,6 +81,10 @@ body {
   position: relative;
   /* scales with the window, so it stays big on big screens */
   width: min(94vw, 56vh);
+  /* Let height win when it has to: with an aspect ratio set, capping the height
+     shrinks the width to match, so the whole body always fits on short screens
+     rather than losing the wheel. */
+  max-height: 100%;
   aspect-ratio: 500 / 830;
   border-radius: 7.5% / 4.5%;
   background: linear-gradient(150deg, var(--shell-a) 0%, var(--shell-b) 60%, var(--shell-c) 100%);
