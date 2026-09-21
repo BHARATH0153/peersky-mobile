@@ -362,3 +362,23 @@ describe('internal app route registry', () => {
     assert.equal(canUseP2pAppPageActions('p2pmd', 'peersky://settings/'), false)
   })
 })
+
+test('keeps subframe web requests inside a Hyper page instead of navigating', () => {
+  // An embed on a hyper site used to replace the page the user was reading.
+  assert.deepEqual(getBrowserRequestAction({
+    requestUrl: 'https://pixelfed.social/akhileshthite/embed',
+    currentSourceKind: 'hyper',
+    isTopFrame: false
+  }), { action: 'allow' })
+
+  // A real click still takes the tab to the web.
+  assert.deepEqual(getBrowserRequestAction({
+    requestUrl: 'https://example.com/',
+    currentSourceKind: 'hyper',
+    isTopFrame: true
+  }), {
+    action: 'commit-web',
+    url: 'https://example.com/',
+    source: { kind: 'web', uri: 'https://example.com/' }
+  })
+})

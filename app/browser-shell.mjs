@@ -188,6 +188,12 @@ export function getBrowserRequestAction ({ requestUrl, currentSourceKind, isTopF
   }
 
   if (currentSourceKind !== 'web') {
+    // Only a real top-frame navigation should take the tab to the web. An
+    // iframe, image or script inside a hyper page is a subresource: loading it
+    // in place is correct, and treating it as a navigation used to hijack the
+    // tab, so an embed on a hyper site replaced the page you were reading.
+    if (!isTopFrame) return { action: 'allow' }
+
     return {
       action: 'commit-web',
       url,
