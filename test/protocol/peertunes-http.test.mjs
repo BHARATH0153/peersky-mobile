@@ -276,6 +276,19 @@ describe('PeerTunes loopback server with injectable Node server', () => {
     }
   })
 
+  it('passes the upstream reason through instead of a generic failure', async () => {
+    // Without this every failure looked identical in the UI, which made a
+    // folder that works on one device and not another impossible to diagnose.
+    const response = await fetch(`${localUrl}/hyper/asset?url=${encodeURIComponent('hyper://abc/broken/')}`, {
+      headers: { accept: 'application/json' }
+    })
+
+    assert.equal(response.status, 500)
+    const body = await response.text()
+    assert.match(body, /Internal Error/)
+    assert.match(body, /REQUEST_TIMEOUT/)
+  })
+
   it('pins an imported folder for offline as soon as its listing is served', async () => {
     // Importing a playlist is exactly this request, so this is the moment the
     // tracks get kept. An offline music app that only streams is not offline.
@@ -407,6 +420,18 @@ function createFakeHyperFetch (calls) {
           'content-length': String(bytes.byteLength)
         }),
         body: (async function * () { yield bytes })()
+      }
+    }
+
+    if (url === 'hyper://abc/broken/') {
+      return {
+        ok: false,
+        status: 500,
+        statusText: 'Internal Error',
+        headers: new Headers({ 'content-type': 'text/plain' }),
+        body: (async function * () {
+          yield new TextEncoder().encode('REQUEST_TIMEOUT: block not available\n    at Hypercore.get')
+        })()
       }
     }
 

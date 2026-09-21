@@ -15,6 +15,9 @@ const ALLOWED_HOSTNAMES = new Set(['127.0.0.1', 'localhost', '[::1]', '::1'])
 // refused rather than buffered.
 const MAX_JSON_BODY_BYTES = 4 * 1024 * 1024
 
+// Enough of an upstream failure to name the cause, not enough to be a payload.
+const MAX_UPSTREAM_ERROR_BYTES = 8 * 1024
+
 // Content types the proxy will hand back as-is. Everything else is forced to
 // application/octet-stream, because a hyper drive is untrusted input and the
 // PeerTunes origin is fixed and holds the user's library.
@@ -220,7 +223,14 @@ async function serveHyperAsset (req, res, { fetch, fetchRange, ensureGlobals, ke
   if (wantsJson(req)) {
     const response = await fetch(assetUrl, { headers: { accept: 'application/json' } })
     if (!response.ok) {
-      throw createHttpError(response.status || 502, response.statusText || 'Unable to fetch Hyper listing')
+      // hypercore-fetch puts the real reason in the body: a read timeout, a
+      // missing block, an empty folder. Throwing away the body left every
+      // failure looking like "can't reach that URL", which is unusable when a
+      // folder fails on one device and works on another.
+      throw createHttpError(
+        response.status || 502,
+        await describeUpstreamFailure(response)
+      )
     }
 
     const headers = headersToObject(response.headers)
@@ -417,6 +427,18 @@ function guardProxyResponse (res) {
 function safeProxyContentType (value) {
   const contentType = String(value || '')
   return PROXYABLE_CONTENT_TYPES.test(contentType) ? contentType : 'application/octet-stream'
+}
+
+async function describeUpstreamFailure (response) {
+  const status = response.status || 502
+  const label = response.statusText || 'Unable to fetch Hyper listing'
+  let detail = ''
+  try {
+    detail = (await readTextWithLimit(response, MAX_UPSTREAM_ERROR_BYTES)).trim()
+  } catch {}
+
+  if (!detail) return `${label} (${status})`
+  return `${label} (${status}): ${detail.split('\n')[0].slice(0, 300)}`
 }
 
 async function readTextWithLimit (response, limit) {
