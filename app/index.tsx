@@ -583,10 +583,14 @@ export default function App () {
     let active = true
 
     function queueIncomingUrl (url: string | null) {
+      // peersky:// is our own scheme and is registered for deep links, so a
+      // shared link like peersky://p2p/peertunes/#playlist=... arrives here.
+      // Only accept the ones that name a built-in app, not any peersky:// text.
+      const isInternalAppUrl = Boolean(url) && getRuntimeAppFromUrl(url as string) !== null
       if (
         !active ||
         !url ||
-        (!isWebUrl(url) && !isHyperUrl(url)) ||
+        (!isWebUrl(url) && !isHyperUrl(url) && !isInternalAppUrl) ||
         url.length > MAX_BROWSER_URL_LENGTH
       ) return
 
@@ -1069,7 +1073,7 @@ export default function App () {
   }
 
   function openInternalApp (app: RuntimeTab, shouldCommit = true, launchSuffix = '') {
-    const appUrl = getRuntimeAppUrl(app)
+    const appUrl = `${getRuntimeAppUrl(app)}${launchSuffix}`
     cancelPendingBrowserLoad()
     setActiveTab(app)
     setBrowserTitle(getRuntimeAppTitle(app))
