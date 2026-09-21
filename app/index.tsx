@@ -3237,7 +3237,12 @@ export default function App () {
                 ? { uri: entry.source.uri }
                 : {
                     html: entry.source.html,
-                    baseUrl: entry.source.kind === 'hyper' ? entry.source.baseUrl : undefined
+                    // iOS refuses to render HTML whose baseUrl uses an unknown
+                    // scheme, so hyper:// pages came up blank there. The base is
+                    // carried by a <base href> tag in the document instead.
+                    baseUrl: entry.source.kind === 'hyper' && Platform.OS !== 'ios'
+                      ? entry.source.baseUrl
+                      : undefined
                   }}
               allowsFullscreenVideo={true}
               cacheEnabled={true}
