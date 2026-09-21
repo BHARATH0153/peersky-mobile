@@ -1,8 +1,16 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { ActivityIndicator, AppState, Pressable, StyleSheet, Text, View } from 'react-native'
+import { ActivityIndicator, AppState, Modal, Pressable, StyleSheet, Text, View } from 'react-native'
+import { CameraView, useCameraPermissions } from 'expo-camera'
+import { SafeAreaView } from 'react-native-safe-area-context'
 import { WebView } from 'react-native-webview'
 
-import { createPeerTunesPageUrl, isPeerTunesPageRequest } from './peertunes-screen.mjs'
+import {
+  PEERTUNES_SCAN_BRIDGE_SCRIPT,
+  createPeerTunesPageUrl,
+  isPeerTunesPageRequest,
+  parsePeerTunesScanRequest,
+  serializeScanResult
+} from './peertunes-screen.mjs'
 
 type Props = {
   error: string | null
@@ -27,7 +35,10 @@ export function PeerTunesScreen ({
   // pressure and leaves an empty view behind. Remounting on that signal is
   // what stops the player going blank until the tab is closed and reopened.
   const [reloadNonce, setReloadNonce] = useState(0)
+  const [scanRequestId, setScanRequestId] = useState<string | null>(null)
+  const [cameraPermission, requestCameraPermission] = useCameraPermissions()
   const webViewRef = useRef<WebView | null>(null)
+  const scanHandledRef = useRef(false)
 
   const recover = useCallback((reason: string) => {
     onStatus(`PeerTunes reloaded after ${reason}`)
@@ -43,6 +54,35 @@ export function PeerTunesScreen ({
     })
     return () => subscription.remove()
   }, [onEnsureServer])
+
+  // The page asks for a scan, native runs the camera and hands the text back.
+  // WKWebView has no BarcodeDetector, and even where it does the native scanner
+  // is the one the rest of the app already uses.
+  const finishScan = useCallback((value: string | null) => {
+    const requestId = scanRequestId
+    setScanRequestId(null)
+    if (!requestId) return
+    webViewRef.current?.injectJavaScript(
+      `window.__peerskyResolveScan(${serializeScanResult(requestId)}, ${serializeScanResult(value)}); true;`
+    )
+  }, [scanRequestId])
+
+  const beginScan = useCallback(async (requestId: string) => {
+    const permission = cameraPermission?.granted
+      ? cameraPermission
+      : await requestCameraPermission()
+
+    if (!permission?.granted) {
+      webViewRef.current?.injectJavaScript(
+        `window.__peerskyResolveScan(${serializeScanResult(requestId)}, null); true;`
+      )
+      onStatus('Camera access is needed to scan a QR code')
+      return
+    }
+
+    scanHandledRef.current = false
+    setScanRequestId(requestId)
+  }, [cameraPermission, onStatus, requestCameraPermission])
 
   if (error) {
     return (
@@ -71,6 +111,7 @@ export function PeerTunesScreen ({
   const pageUrl = createPeerTunesPageUrl(localUrl, launchSuffix)
 
   return (
+    <>
     <WebView
       key={`${pageUrl}:${reloadNonce}`}
       ref={webViewRef}
@@ -78,6 +119,11 @@ export function PeerTunesScreen ({
       // This view only ever shows the loopback app, so pin it. The navigation
       // handler below is the real gate; this is the second layer behind it.
       originWhitelist={[localUrl]}
+      injectedJavaScriptBeforeContentLoaded={PEERTUNES_SCAN_BRIDGE_SCRIPT}
+      onMessage={(event) => {
+        const requestId = parsePeerTunesScanRequest(event.nativeEvent.data)
+        if (requestId) void beginScan(requestId)
+      }}
       allowsInlineMediaPlayback={true}
       allowsProtectedMedia={true}
       androidLayerType='hardware'
@@ -104,6 +150,36 @@ export function PeerTunesScreen ({
         recover(`a load failure (${event.nativeEvent.description})`)
       }}
     />
+    <Modal
+      animationType='fade'
+      onRequestClose={() => finishScan(null)}
+      visible={scanRequestId !== null}
+    >
+      <View style={styles.scanner}>
+        {scanRequestId !== null && (
+          <CameraView
+            style={StyleSheet.absoluteFillObject}
+            barcodeScannerSettings={{ barcodeTypes: ['qr'] }}
+            onBarcodeScanned={({ data }) => {
+              if (scanHandledRef.current) return
+              scanHandledRef.current = true
+              finishScan(data)
+            }}
+          />
+        )}
+        <SafeAreaView style={styles.scannerOverlay} edges={['top', 'right', 'bottom', 'left']}>
+          <Text style={styles.scanHint}>Align the QR code inside the frame</Text>
+          <Pressable
+            accessibilityRole='button'
+            onPress={() => finishScan(null)}
+            style={styles.scannerClose}
+          >
+            <Text style={styles.scannerCloseText}>Cancel</Text>
+          </Pressable>
+        </SafeAreaView>
+      </View>
+    </Modal>
+    </>
   )
 }
 
@@ -121,6 +197,35 @@ const styles = StyleSheet.create({
   },
   messageDark: {
     color: '#e6e6ea'
+  },
+  scanner: {
+    backgroundColor: '#000000',
+    flex: 1
+  },
+  scannerOverlay: {
+    alignItems: 'center',
+    flex: 1,
+    justifyContent: 'flex-end',
+    padding: 24
+  },
+  scanHint: {
+    color: '#ffffff',
+    fontSize: 15,
+    marginBottom: 16,
+    textAlign: 'center'
+  },
+  scannerClose: {
+    alignItems: 'center',
+    backgroundColor: '#ffffff',
+    borderRadius: 10,
+    justifyContent: 'center',
+    minHeight: 44,
+    paddingHorizontal: 28
+  },
+  scannerCloseText: {
+    color: '#1f2027',
+    fontSize: 15,
+    fontWeight: '700'
   },
   retry: {
     alignItems: 'center',

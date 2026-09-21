@@ -7,7 +7,12 @@ import {
   getRuntimeAppTitle,
   getRuntimeAppUrl
 } from '../../app/internal-apps-registry.mjs'
-import { createPeerTunesPageUrl, isPeerTunesPageRequest } from '../../app/peertunes/peertunes-screen.mjs'
+import {
+  createPeerTunesPageUrl,
+  isPeerTunesPageRequest,
+  parsePeerTunesScanRequest,
+  serializeScanResult
+} from '../../app/peertunes/peertunes-screen.mjs'
 
 describe('internal app registry', () => {
   test('registers PeerTunes as a p2p app route', () => {
@@ -82,4 +87,27 @@ test('treats a same-origin URL as a PeerTunes page whatever shape it takes', () 
   assert.equal(isPeerTunesPageRequest('http://127.0.0.1:47318/', base), false)
   assert.equal(isPeerTunesPageRequest('https://127.0.0.1:47317/', base), false)
   assert.equal(isPeerTunesPageRequest('https://evil.example/', base), false)
+})
+
+test('only accepts scan requests the bridge itself sent', () => {
+  const good = JSON.stringify({ type: 'peertunes-scan-qr', requestId: 'scan-123-abc' })
+  assert.equal(parsePeerTunesScanRequest(good), 'scan-123-abc')
+
+  // Anything else the page posts must not open the camera.
+  assert.equal(parsePeerTunesScanRequest(JSON.stringify({ type: 'other', requestId: 'scan-1' })), null)
+  assert.equal(parsePeerTunesScanRequest(JSON.stringify({ type: 'peertunes-scan-qr' })), null)
+  assert.equal(parsePeerTunesScanRequest(JSON.stringify({ type: 'peertunes-scan-qr', requestId: 'x'.repeat(200) })), null)
+  assert.equal(parsePeerTunesScanRequest('not json'), null)
+  assert.equal(parsePeerTunesScanRequest(''), null)
+})
+
+test('escapes scanned text before it goes back into the page', () => {
+  // Whatever was on the QR code is injected as a JavaScript literal, so it has
+  // to survive quotes and the two separators that are legal JSON but not legal
+  // inside a JavaScript string.
+  assert.equal(serializeScanResult('hyper://abc/Classic/'), '"hyper://abc/Classic/"')
+  assert.equal(serializeScanResult(null), 'null')
+  assert.equal(serializeScanResult('a"b'), '"a\\"b"')
+  assert.equal(serializeScanResult('a\u2028b'), '"a\\u2028b"')
+  assert.equal(serializeScanResult('a\u2029b'), '"a\\u2029b"')
 })

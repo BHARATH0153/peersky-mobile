@@ -1307,6 +1307,34 @@
         },
         destroy() { stop(); },
         async start(video) {
+          // Inside PeerSky the shell hands us its own camera, which is the same
+          // scanner the rest of the app uses and works where BarcodeDetector
+          // does not exist. Fall back to the web API outside the app.
+          if (typeof window.peerskyScanQr === "function") {
+            video.remove();
+            this.note.textContent = "Opening the camera...";
+            let scanned = null;
+            try {
+              scanned = await window.peerskyScanQr();
+            } catch {
+              scanned = null;
+            }
+            if (stopped) return;
+            // Validate exactly like the web path does, so a QR code holding
+            // something that is not a supported URL is refused either way.
+            const url = scanned ? PT.readScannedUrl(scanned) : null;
+            if (url) {
+              stop();
+              ui.wheel.tick(1.2);
+              onResult(url);
+              return;
+            }
+            this.note.textContent = scanned
+              ? "That QR code is not a hyper:// or https:// link."
+              : "Nothing scanned. Type the URL instead.";
+            return;
+          }
+
           const Detector = window.BarcodeDetector;
           if (!Detector || !navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
             this.note.textContent = "This browser cannot scan QR codes. Type the URL instead.";

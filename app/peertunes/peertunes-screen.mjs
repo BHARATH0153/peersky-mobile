@@ -28,3 +28,49 @@ export function isPeerTunesPageRequest (requestUrl, localUrl) {
     return false
   }
 }
+
+// PeerTunes asks native to scan, because WKWebView has no BarcodeDetector and
+// the native scanner is the one the rest of the app already uses. The page sees
+// a promise; native runs the camera and resolves it.
+export const PEERTUNES_SCAN_BRIDGE_SCRIPT = `(function () {
+  var pending = {};
+  window.__peerskyResolveScan = function (id, value) {
+    var resolve = pending[id];
+    if (!resolve) return;
+    delete pending[id];
+    resolve(typeof value === 'string' && value ? value : null);
+  };
+  window.peerskyScanQr = function () {
+    return new Promise(function (resolve) {
+      if (!window.ReactNativeWebView) return resolve(null);
+      var id = 'scan-' + Date.now() + '-' + Math.random().toString(36).slice(2);
+      pending[id] = resolve;
+      window.ReactNativeWebView.postMessage(JSON.stringify({
+        type: 'peertunes-scan-qr',
+        requestId: id
+      }));
+    });
+  };
+})(); true;`
+
+export function parsePeerTunesScanRequest (raw) {
+  try {
+    const parsed = JSON.parse(String(raw || ''))
+    if (parsed?.type !== 'peertunes-scan-qr') return null
+    const requestId = parsed.requestId
+    return typeof requestId === 'string' && /^scan-[\w-]{1,64}$/.test(requestId)
+      ? requestId
+      : null
+  } catch {
+    return null
+  }
+}
+
+// Scanned text is whatever was on the QR code, so it goes back into the page as
+// a JSON literal. The two line separators are valid JSON but break a JavaScript
+// string, so escape them too.
+export function serializeScanResult (value) {
+  return JSON.stringify(value ?? null)
+    .replace(/\u2028/g, '\\u2028')
+    .replace(/\u2029/g, '\\u2029')
+}
