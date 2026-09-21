@@ -40,6 +40,7 @@ let serverInfo = null
 let serverTransition = Promise.resolve()
 let bareHttp = null
 let hyperFetchModule = null
+let offlineModule = null
 
 export async function startPeerTunesServer () {
   return withServerTransition(async () => {
@@ -115,7 +116,13 @@ export async function stopPeerTunesServer () {
   })
 }
 
-export function createPeerTunesHttpServer ({ httpImpl, fetch, fetchRange, ensureGlobals = () => {} } = {}) {
+export function createPeerTunesHttpServer ({
+  httpImpl,
+  fetch,
+  fetchRange,
+  ensureGlobals = () => {},
+  keepOffline = keepAssetOffline
+} = {}) {
   if (!httpImpl?.createServer) {
     throw new Error('PeerTunes HTTP server requires an HTTP implementation.')
   }
@@ -124,7 +131,7 @@ export function createPeerTunesHttpServer ({ httpImpl, fetch, fetchRange, ensure
   }
 
   return httpImpl.createServer((req, res) => {
-    handleRequest(req, res, { fetch, fetchRange, ensureGlobals })
+    handleRequest(req, res, { fetch, fetchRange, ensureGlobals, keepOffline })
   })
 }
 
@@ -157,7 +164,7 @@ export function injectHyperBridge (html) {
   return `${source.slice(0, insertAt)}${HYPER_BRIDGE_SCRIPT}${source.slice(insertAt)}`
 }
 
-function handleRequest (req, res, { fetch, fetchRange, ensureGlobals }) {
+function handleRequest (req, res, { fetch, fetchRange, ensureGlobals, keepOffline }) {
   const requestUrl = parseRequestUrl(req.url)
   if (!requestUrl) {
     sendText(res, 400, 'Bad request')
@@ -180,7 +187,7 @@ function handleRequest (req, res, { fetch, fetchRange, ensureGlobals }) {
   }
 
   if (requestUrl.pathname === '/hyper/asset') {
-    serveHyperAsset(req, res, { fetch, fetchRange, ensureGlobals }, requestUrl.searchParams.get('url'))
+    serveHyperAsset(req, res, { fetch, fetchRange, ensureGlobals, keepOffline }, requestUrl.searchParams.get('url'))
       .catch((error) => sendError(req, res, error))
     return
   }
@@ -194,7 +201,7 @@ function handleRequest (req, res, { fetch, fetchRange, ensureGlobals }) {
   sendStaticAsset(req, res, asset)
 }
 
-async function serveHyperAsset (req, res, { fetch, fetchRange, ensureGlobals }, assetUrl) {
+async function serveHyperAsset (req, res, { fetch, fetchRange, ensureGlobals, keepOffline }, assetUrl) {
   if (!assetUrl) {
     sendText(res, 400, 'Missing asset url')
     return
@@ -224,6 +231,7 @@ async function serveHyperAsset (req, res, { fetch, fetchRange, ensureGlobals }, 
 
     const body = await readTextWithLimit(response, MAX_JSON_BODY_BYTES)
     sendText(res, 200, body, headers['content-type'] || 'application/json; charset=utf-8')
+    keepOffline(assetUrl)
     return
   }
 
@@ -314,6 +322,30 @@ async function getBareHttp () {
 
 // Loaded lazily so tests can drive the server with a fake fetch and Node's
 // http module without pulling the Hyper SDK into the process.
+// Importing a playlist means reading its folder listing, so that is when the
+// tracks get pinned for offline. Fire and forget: a failure here must not break
+// the import, and the download runs in the background.
+function keepAssetOffline (assetUrl) {
+  getOfflineModule()
+    .then(({ keepHyperOffline }) => keepHyperOffline({ url: assetUrl, wait: false }))
+    .then((result) => {
+      if (!result?.ok) {
+        console.warn('[peertunes] Unable to keep offline:', result?.error || 'unknown error')
+      }
+    })
+    .catch((error) => {
+      console.warn('[peertunes] Unable to keep offline:', error?.message || error)
+    })
+}
+
+async function getOfflineModule () {
+  if (!offlineModule) {
+    offlineModule = await import('../hyper/offline-manager.mjs')
+  }
+
+  return offlineModule
+}
+
 async function getHyperFetchModule () {
   if (!hyperFetchModule) {
     hyperFetchModule = await import('../hyper/fetch.mjs')
@@ -389,15 +421,17 @@ function safeProxyContentType (value) {
 
 async function readTextWithLimit (response, limit) {
   const body = response.body
-  const decoder = new TextDecoder()
-  let text = ''
+  const chunks = []
   let seen = 0
 
+  // Collect bytes and decode once at the end. Bare has no TextDecoder, and
+  // decoding per chunk would split multi-byte characters across boundaries
+  // anyway. The cap keeps the buffer bounded.
   const push = (chunk) => {
     if (!chunk || !chunk.byteLength) return
     seen += chunk.byteLength
     if (seen > limit) throw createHttpError(413, 'Hyper listing is too large')
-    text += decoder.decode(chunk, { stream: true })
+    chunks.push(b4a.from(chunk))
   }
 
   if (body && typeof body.getReader === 'function') {
@@ -411,12 +445,12 @@ async function readTextWithLimit (response, limit) {
     } finally {
       if (reader.releaseLock) reader.releaseLock()
     }
-    return text + decoder.decode()
+    return b4a.toString(b4a.concat(chunks), 'utf8')
   }
 
   if (body && typeof body[Symbol.asyncIterator] === 'function') {
     for await (const chunk of body) push(chunk)
-    return text + decoder.decode()
+    return b4a.toString(b4a.concat(chunks), 'utf8')
   }
 
   const whole = await response.text()

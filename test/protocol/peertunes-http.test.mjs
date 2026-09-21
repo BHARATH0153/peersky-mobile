@@ -16,10 +16,16 @@ describe('PeerTunes loopback server with injectable Node server', () => {
   let server
   let localUrl
   let fetchCalls
+  let keptOffline
 
   beforeEach(async () => {
     fetchCalls = []
-    server = createPeerTunesHttpServer({ httpImpl: http, fetch: createFakeHyperFetch(fetchCalls) })
+    keptOffline = []
+    server = createPeerTunesHttpServer({
+      httpImpl: http,
+      fetch: createFakeHyperFetch(fetchCalls),
+      keepOffline: (url) => keptOffline.push(url)
+    })
     localUrl = await listen(server)
   })
 
@@ -246,6 +252,52 @@ describe('PeerTunes loopback server with injectable Node server', () => {
     assert.deepEqual(calls, [['end']])
   })
 
+  it('reads a listing without globals the Bare runtime lacks', async () => {
+    // Bare has no TextDecoder. Node does, so a test that assumes it passes here
+    // and then 502s on device with "TextDecoder is not defined". Take the
+    // globals away for the duration so this path is exercised as Bare sees it.
+    const removed = {}
+    for (const name of ['TextDecoder', 'TextEncoder']) {
+      removed[name] = globalThis[name]
+      delete globalThis[name]
+    }
+
+    try {
+      const response = await fetch(`${localUrl}/hyper/asset?url=${encodeURIComponent('hyper://abc/streamed/')}`, {
+        headers: { accept: 'application/json' }
+      })
+
+      assert.equal(response.status, 200)
+      assert.deepEqual(await response.json(), ['Song é'])
+    } finally {
+      for (const [name, value] of Object.entries(removed)) {
+        if (value !== undefined) globalThis[name] = value
+      }
+    }
+  })
+
+  it('pins an imported folder for offline as soon as its listing is served', async () => {
+    // Importing a playlist is exactly this request, so this is the moment the
+    // tracks get kept. An offline music app that only streams is not offline.
+    const folder = 'hyper://abc/music/'
+    const response = await fetch(`${localUrl}/hyper/asset?url=${encodeURIComponent(folder)}`, {
+      headers: { accept: 'application/json' }
+    })
+
+    assert.equal(response.status, 200)
+    assert.deepEqual(keptOffline, [folder])
+
+    // Playing a track must not pin anything on its own; the folder already did.
+    await fetch(`${localUrl}/hyper/asset?url=${encodeURIComponent('hyper://abc/music/01 Song.mp3')}`)
+    assert.deepEqual(keptOffline, [folder])
+
+    // And a listing that failed upstream pins nothing.
+    await fetch(`${localUrl}/hyper/asset?url=${encodeURIComponent('hyper://abc/missing/')}`, {
+      headers: { accept: 'application/json' }
+    })
+    assert.deepEqual(keptOffline, [folder])
+  })
+
   it('refuses a listing that would not fit in memory', async () => {
     const response = await fetch(`${localUrl}/hyper/asset?url=${encodeURIComponent('hyper://abc/huge/')}`, {
       headers: { accept: 'application/json' }
@@ -355,6 +407,23 @@ function createFakeHyperFetch (calls) {
           'content-length': String(bytes.byteLength)
         }),
         body: (async function * () { yield bytes })()
+      }
+    }
+
+    if (url === 'hyper://abc/streamed/') {
+      // Split a multi-byte character across chunks so a per-chunk decode would
+      // corrupt it, and deliver it as a stream so the reader path is used.
+      const bytes = [
+        new Uint8Array([0x5b, 0x22, 0x53, 0x6f, 0x6e, 0x67, 0x20]),
+        new Uint8Array([0xc3]),
+        new Uint8Array([0xa9, 0x22, 0x5d])
+      ]
+      return {
+        ok: true,
+        status: 200,
+        statusText: 'OK',
+        headers: new Headers({ 'content-type': 'application/json; charset=utf-8' }),
+        body: (async function * () { for (const chunk of bytes) yield chunk })()
       }
     }
 
