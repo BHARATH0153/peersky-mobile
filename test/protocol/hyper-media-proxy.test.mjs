@@ -190,7 +190,42 @@ describe('hyper media proxy server', () => {
     })
   })
 
-  test('serves large media in bounded range windows', async () => {
+  test('answers a plain GET with the whole resource so players learn its length', async () => {
+    // WebKit opens media with a bare GET and reads Content-Length to work out
+    // duration. Replying 206 with a windowed length left iOS with no duration,
+    // no progress bar and no seeking, while Chromium was fine because it always
+    // opens with "Range: bytes=0-".
+    const calls = []
+    const server = createHyperAssetServer({
+      httpImpl: http,
+      authToken: ASSET_AUTH_TOKEN,
+      fetch: async (url, init) => {
+        calls.push({ url, init })
+        return createStreamResponse({
+          body: ['whole-file'],
+          headers: {
+            'content-type': 'video/mp4',
+            'content-length': String(8 * 1024 * 1024)
+          }
+        })
+      }
+    })
+
+    await withServer(server, async (localUrl) => {
+      const assetUrl = 'hyper://example.com/large-video.mp4'
+      const response = await fetch(`${localUrl}/asset?token=${ASSET_AUTH_TOKEN}&url=${encodeURIComponent(assetUrl)}`)
+
+      assert.equal(response.status, 200)
+      assert.equal(response.headers.get('content-length'), String(8 * 1024 * 1024))
+      assert.equal(response.headers.get('accept-ranges'), 'bytes')
+      assert.equal(response.headers.get('content-range'), null)
+      // No second fetch: the request was never re-issued as a range.
+      assert.equal(calls.length, 1)
+      assert.equal(calls[0].init?.headers, undefined)
+    })
+  })
+
+  test('serves ranged media in bounded range windows', async () => {
     const calls = []
     let initialBodyCancelled = false
     const initialBody = {
@@ -229,13 +264,54 @@ describe('hyper media proxy server', () => {
 
     await withServer(server, async (localUrl) => {
       const assetUrl = 'hyper://example.com/large-video.mp4'
-      const response = await fetch(`${localUrl}/asset?token=${ASSET_AUTH_TOKEN}&url=${encodeURIComponent(assetUrl)}`)
+      const response = await fetch(`${localUrl}/asset?token=${ASSET_AUTH_TOKEN}&url=${encodeURIComponent(assetUrl)}`, {
+        headers: { Range: 'bytes=0-' }
+      })
 
       assert.equal(response.status, 206)
       assert.equal(await response.text(), 'window')
       assert.equal(initialBodyCancelled, true)
       assert.equal(calls.length, 2)
       assert.equal(calls[1].init.headers.get('range'), `bytes=0-${4 * 1024 * 1024 - 1}`)
+    })
+  })
+
+  test('never returns more bytes than the client asked for', async () => {
+    const calls = []
+    const server = createHyperAssetServer({
+      httpImpl: http,
+      authToken: ASSET_AUTH_TOKEN,
+      fetch: async (url, init) => {
+        calls.push({ url, init })
+        if (calls.length === 1) {
+          return createStreamResponse({
+            body: ['x'],
+            headers: {
+              'content-type': 'audio/mpeg',
+              'content-length': String(8 * 1024 * 1024)
+            }
+          })
+        }
+        return createStreamResponse({
+          status: 206,
+          body: ['short'],
+          headers: {
+            'content-type': 'audio/mpeg',
+            'content-range': `bytes 0-1000/${8 * 1024 * 1024}`,
+            'content-length': '5'
+          }
+        })
+      }
+    })
+
+    await withServer(server, async (localUrl) => {
+      const assetUrl = 'hyper://example.com/song.mp3'
+      await fetch(`${localUrl}/asset?token=${ASSET_AUTH_TOKEN}&url=${encodeURIComponent(assetUrl)}`, {
+        headers: { Range: 'bytes=0-1000' }
+      })
+
+      // The window must not widen a narrow request back out to 4 MB.
+      assert.equal(calls[1].init.headers.get('range'), 'bytes=0-1000')
     })
   })
 

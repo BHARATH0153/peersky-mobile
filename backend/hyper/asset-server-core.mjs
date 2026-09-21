@@ -170,6 +170,13 @@ function getMediaWindowRange ({
   if (method !== 'GET' || downloadName) return null
   if (!/^(?:audio|video)\//i.test(contentType)) return null
 
+  // Only narrow a request the client actually ranged. Answering a plain GET
+  // with 206 and a windowed Content-Length is an unsolicited partial response:
+  // WebKit opens media with a bare GET, so it never learned the real length and
+  // duration, the progress bar and seeking were all dead on iOS. Chromium opens
+  // with "Range: bytes=0-", which is why Android looked fine.
+  if (!rangeHeader) return null
+
   const contentLength = Number(headers['content-length'])
   const responseIsBounded = Number.isSafeInteger(contentLength) &&
     contentLength <= HYPER_MEDIA_WINDOW_BYTES
@@ -182,9 +189,11 @@ function getMediaWindowRange ({
 
   const start = requestedRange?.start || 0
   const totalLength = getAssetTotalLength(headers, rangeHeader)
-  const end = Number.isSafeInteger(totalLength)
-    ? Math.min(totalLength - 1, start + HYPER_MEDIA_WINDOW_BYTES - 1)
-    : start + HYPER_MEDIA_WINDOW_BYTES - 1
+  const limits = [start + HYPER_MEDIA_WINDOW_BYTES - 1]
+  if (Number.isSafeInteger(totalLength)) limits.push(totalLength - 1)
+  // A client asking for bytes=0-1000 must not be handed the whole window back.
+  if (Number.isSafeInteger(requestedRange?.end)) limits.push(requestedRange.end)
+  const end = Math.min(...limits)
   return end >= start ? `bytes=${start}-${end}` : null
 }
 
@@ -199,7 +208,9 @@ function parseMediaRange (rangeHeader) {
   }
 
   const start = Number(range[1])
-  return Number.isSafeInteger(start) ? { start } : null
+  if (!Number.isSafeInteger(start)) return null
+  const end = range[2] ? Number(range[2]) : null
+  return Number.isSafeInteger(end) ? { start, end } : { start }
 }
 
 function getAssetTotalLength (headers, rangeHeader) {
