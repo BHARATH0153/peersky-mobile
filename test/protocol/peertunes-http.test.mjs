@@ -6,7 +6,8 @@ import {
   HYPER_BRIDGE_SCRIPT,
   createPeerTunesHttpServer,
   injectHyperBridge,
-  resolveStaticAsset
+  resolveStaticAsset,
+  sendError
 } from '../../backend/peertunes/server.mjs'
 
 const SONG_BYTES = new Uint8Array([0x49, 0x44, 0x33, 0x04, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00])
@@ -148,6 +149,110 @@ describe('PeerTunes loopback server with injectable Node server', () => {
     const response = await fetch(`${localUrl}/hyper/asset?url=${encodeURIComponent('hyper://abc/missing.mp3')}`)
     assert.equal(response.status, 404)
   })
+
+  it('refuses requests that another site made', async () => {
+    // A same-origin GET sends no Origin, so one that does is somebody else.
+    const crossOrigin = await requestWithHeaders(localUrl, '/', { origin: 'https://evil.example' })
+    assert.equal(crossOrigin.status, 403)
+
+    // <audio src> and friends send no Origin at all; Sec-Fetch-Site catches those.
+    const noCors = await requestWithHeaders(localUrl, '/hyper/asset?url=hyper%3A%2F%2Fabc%2Fmusic%2F', {
+      'sec-fetch-site': 'cross-site'
+    })
+    assert.equal(noCors.status, 403)
+
+    // A hostname that resolves to loopback must not pass either.
+    const rebound = await requestWithHeaders(localUrl, '/', { host: 'evil.example' })
+    assert.equal(rebound.status, 403)
+
+    // None of those reached the hyper layer.
+    assert.deepEqual(fetchCalls, [])
+
+    const sameOrigin = await requestWithHeaders(localUrl, '/', { 'sec-fetch-site': 'same-origin' })
+    assert.equal(sameOrigin.status, 200)
+  })
+
+  it('keeps proxied drive content unreadable by other sites and unrenderable', async () => {
+    const response = await fetch(`${localUrl}/hyper/asset?url=${encodeURIComponent('hyper://abc/evil.html')}`)
+
+    assert.equal(response.status, 200)
+    // A drive must not be able to run scripts on the PeerTunes origin, which is
+    // fixed and holds the user's library.
+    assert.equal(response.headers.get('content-type'), 'application/octet-stream')
+    // And no website may read drive bytes back through the proxy.
+    assert.equal(response.headers.get('access-control-allow-origin'), null)
+
+    const audio = await fetch(`${localUrl}/hyper/asset?url=${encodeURIComponent('hyper://abc/music/01 Song.mp3')}`)
+    assert.equal(audio.headers.get('content-type'), 'audio/mpeg')
+  })
+
+  it('survives a client that walks away mid-track', async () => {
+    // Skipping a track disconnects mid-stream. That used to reach sendError and
+    // hand the error to res.destroy, which can abort the whole Bare worklet and
+    // take hyper and PeerChat down with it.
+    await new Promise((resolve, reject) => {
+      const { hostname, port } = new URL(localUrl)
+      const request = http.request({
+        hostname,
+        port,
+        path: `/hyper/asset?url=${encodeURIComponent('hyper://abc/long.mp3')}`,
+        method: 'GET'
+      }, (response) => {
+        response.once('data', () => {
+          request.destroy()
+          resolve()
+        })
+      })
+      request.on('error', () => resolve())
+      request.end()
+      setTimeout(reject, 5000, new Error('stream never started'))
+    })
+
+    await new Promise((resolve) => setTimeout(resolve, 100))
+
+    // The server is still up and still serving.
+    const after = await fetch(`${localUrl}/`)
+    assert.equal(after.status, 200)
+  })
+
+  it('never hands a late error to destroy', () => {
+    // Bare aborts the whole JS worklet if a late stream error goes through its
+    // native HTTP callback, which would take hyper and PeerChat down too. And a
+    // client that walked away is not an error worth reporting at all.
+    const calls = []
+    const makeRes = (overrides) => ({
+      headersSent: false,
+      destroyed: false,
+      statusCode: 0,
+      setHeader () {},
+      end () { calls.push(['end']) },
+      destroy (...args) { calls.push(['destroy', ...args]) },
+      ...overrides
+    })
+
+    sendError({ aborted: true }, makeRes({ headersSent: true }), new Error('gone'))
+    assert.deepEqual(calls, [], 'an aborted request should be left alone')
+
+    sendError({}, makeRes({ destroyed: true }), new Error('gone'))
+    assert.deepEqual(calls, [], 'a destroyed response should be left alone')
+
+    sendError({}, makeRes({ headersSent: true }), new Error('late failure'))
+    assert.deepEqual(calls, [['destroy']], 'destroy must be called with no error')
+
+    calls.length = 0
+    const res = makeRes({})
+    sendError({}, res, Object.assign(new Error('bad drive'), { statusCode: 502 }))
+    assert.equal(res.statusCode, 502)
+    assert.deepEqual(calls, [['end']])
+  })
+
+  it('refuses a listing that would not fit in memory', async () => {
+    const response = await fetch(`${localUrl}/hyper/asset?url=${encodeURIComponent('hyper://abc/huge/')}`, {
+      headers: { accept: 'application/json' }
+    })
+
+    assert.equal(response.status, 413)
+  })
 })
 
 describe('PeerTunes server helpers', () => {
@@ -223,6 +328,47 @@ function createFakeHyperFetch (calls) {
       }
     }
 
+    if (url === 'hyper://abc/long.mp3') {
+      const chunk = new Uint8Array(64 * 1024)
+      return {
+        ok: true,
+        status: 200,
+        statusText: 'OK',
+        headers: new Headers({ 'content-type': 'audio/mpeg', 'accept-ranges': 'bytes' }),
+        body: (async function * () {
+          for (let index = 0; index < 64; index++) {
+            await new Promise((resolve) => setTimeout(resolve, 5))
+            yield chunk
+          }
+        })()
+      }
+    }
+
+    if (url === 'hyper://abc/evil.html') {
+      const bytes = new TextEncoder().encode('<script>alert(1)</script>')
+      return {
+        ok: true,
+        status: 200,
+        statusText: 'OK',
+        headers: new Headers({
+          'content-type': 'text/html; charset=utf-8',
+          'content-length': String(bytes.byteLength)
+        }),
+        body: (async function * () { yield bytes })()
+      }
+    }
+
+    if (url === 'hyper://abc/huge/') {
+      const chunk = new Uint8Array(1024 * 1024)
+      return {
+        ok: true,
+        status: 200,
+        statusText: 'OK',
+        headers: new Headers({ 'content-type': 'application/json; charset=utf-8' }),
+        body: (async function * () { for (let index = 0; index < 8; index++) yield chunk })()
+      }
+    }
+
     return {
       ok: false,
       status: 404,
@@ -231,6 +377,20 @@ function createFakeHyperFetch (calls) {
       text: async () => 'not found'
     }
   }
+}
+
+function requestWithHeaders (baseUrl, path, headers) {
+  const { hostname, port } = new URL(baseUrl)
+  return new Promise((resolve, reject) => {
+    const request = http.request({ hostname, port, path, method: 'GET', headers }, (response) => {
+      let body = ''
+      response.setEncoding('utf8')
+      response.on('data', (chunk) => { body += chunk })
+      response.on('end', () => resolve({ status: response.statusCode, headers: response.headers, body }))
+    })
+    request.on('error', reject)
+    request.end()
+  })
 }
 
 function readHeader (headers, name) {
