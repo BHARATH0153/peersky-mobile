@@ -10,8 +10,9 @@
     "update:peerchat-moderation-data": "node scripts/update-peerchat-moderation-data.mjs",
     "setup:content-blocking": "node scripts/setup-content-blocking.mjs",
     "eas-build-pre-install": "node scripts/setup-content-blocking.mjs --eas && node scripts/update-content-blocking-snapshot.mjs",
+    "eas-build-post-install": "npm run bundle:bare",
     "update:content-blocking-snapshot": "node scripts/update-content-blocking-snapshot.mjs",
-    "bundle:bare": "npm run update:content-blocking-snapshot && npm run generate:yjs-runtime && npm run generate:katex-runtime && npm run generate:ieee-runtime && bare-pack --host android-arm64 --host android-arm --host android-ia32 --host android-x64 --host ios-arm64 --host ios-arm64-simulator --host ios-x64-simulator --imports backend/bare-imports.json --linked --out app/app.bundle.mjs backend/backend.mjs",
+    "bundle:bare": "npm run update:content-blocking-snapshot && npm run generate:yjs-runtime && npm run generate:katex-runtime && npm run generate:ieee-runtime && npm run generate:peertunes-runtime && bare-pack --host android-arm64 --host android-arm --host android-ia32 --host android-x64 --host ios-arm64 --host ios-arm64-simulator --host ios-x64-simulator --imports backend/bare-imports.json --linked --out app/app.bundle.mjs backend/backend.mjs",
     "start": "expo start",
     "preandroid": "npm run bundle:bare",
     "android": "expo run:android",
@@ -21,7 +22,8 @@
     "test": "npm run test:bundle && npm run test:runtime",
     "test:runtime": "node --test ./test/protocol/*.test.mjs ./test/platform/*.test.mjs",
     "test:bundle": "npm run bundle:bare",
-    "test:holesail:live": "node --test --test-force-exit ./test/integration/holesail-live.test.mjs"
+    "test:holesail:live": "node --test --test-force-exit ./test/integration/holesail-live.test.mjs",
+    "generate:peertunes-runtime": "node scripts/generate-peertunes-runtime.mjs"
   },
   "repository": {
     "type": "git",
@@ -107,7 +109,9 @@
       "backend/peerchat/moderation-data.mjs",
       "backend/p2pmd/ieee-runtime.mjs",
       "backend/p2pmd/katex-runtime.mjs",
-      "app/privacy/generated/*.mjs"
+      "app/privacy/generated/*.mjs",
+      "assets/peertunes/**",
+      "backend/peertunes/peertunes-runtime.mjs"
     ]
   }
 }

@@ -18,3 +18,4 @@ app/app.bundle.mjs
 assets/content-blocking/*.txt
 assets/content-blocking/manifest.json
 .idea
+.agents/

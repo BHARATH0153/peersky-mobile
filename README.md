@@ -36,6 +36,7 @@ A peer-to-peer mobile browser built with [Bare](https://github.com/holepunchto/b
 - Local app routes for bundled peer-to-peer tools:
   - `peersky://p2p/p2pmd/`
   - `peersky://p2p/peerchat/`
+  - `peersky://p2p/peertunes/`
   - `peersky://holesail/`
   - `peersky://p2p/hyperdrive/`
 
@@ -107,6 +108,7 @@ npm run android
 - [P2PMD](docs/p2pmd.md)
 - [PeerChat](docs/peerchat.md)
 - [PeerChat moderation data](backend/peerchat/MODERATION_DATA.md)
+- [PeerTunes](docs/peertunes.md)
 - [Link Device](docs/link-device.md)
 - [Testing guide](docs/testing.md)
 - [Content blocking](docs/content-blocking.md)

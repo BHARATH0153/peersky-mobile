@@ -72,7 +72,7 @@ function handleHyperAssetRequest (req, res, fetch, fetchRange, authToken) {
     })
 }
 
-async function streamHyperAsset (fetch, fetchRange, assetUrl, req, res, downloadName) {
+export async function streamHyperAsset (fetch, fetchRange, assetUrl, req, res, downloadName) {
   const rangeHeader = getRequestHeader(req, 'range')
   if (isMalformedRangeHeader(rangeHeader)) {
     sendAssetEmpty(res, 416)

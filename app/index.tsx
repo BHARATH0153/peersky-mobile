@@ -94,6 +94,7 @@ import {
   type RuntimeTab,
   canUseP2pAppPageActions,
   getRuntimeAppFromUrl,
+  getRuntimeAppLaunchSuffix,
   getRuntimeAppIconSource,
   getRuntimeAppTitle,
   getRuntimeAppUrl
@@ -133,6 +134,7 @@ import { HyperdriveScreen } from './hyperdrive/HyperdriveScreen'
 import { canUseNetworkForOfflineHyper } from './hyperdrive/offline-network.mjs'
 import { PeerChatScreen, type PeerChatResponse } from './peerchat/PeerChatScreen'
 import { usePeerChatNotifications } from './peerchat/usePeerChatNotifications'
+import { PeerTunesScreen } from './peertunes/PeerTunesScreen'
 import { peerSkyWebViewNativeConfig } from './downloads/PeerSkyWebView'
 import {
   initializeContentBlocking,
@@ -174,7 +176,8 @@ import {
   RPC_P2PMD_PREVIEW,
   RPC_P2PMD_ROOM_JOIN,
   RPC_P2PMD_ROOM_PUBLISH,
-  RPC_P2PMD_ROOM_STATUS
+  RPC_P2PMD_ROOM_STATUS,
+  RPC_PEERTUNES_START
 } from '../backend/rpc/commands.mjs'
 
 type P2pmdRoom = {
@@ -391,6 +394,9 @@ export default function App () {
   const [hsConnectPort, setHsConnectPort] = useState('8989')
   const [hsConnectHost, setHsConnectHost] = useState('127.0.0.1')
   const [p2pmdUrl, setP2pmdUrl] = useState<string | null>(null)
+  const [peertunesUrl, setPeertunesUrl] = useState<string | null>(null)
+  const [peertunesLaunchSuffix, setPeertunesLaunchSuffix] = useState('')
+  const [peertunesError, setPeertunesError] = useState<string | null>(null)
   const [p2pmdRoom, setP2pmdRoom] = useState<P2pmdRoom | null>(null)
   const [p2pmdEditorHtml, setP2pmdEditorHtml] = useState<string | null>(null)
   const [p2pmdJoinKey, setP2pmdJoinKey] = useState('')
@@ -905,7 +911,7 @@ export default function App () {
 
     const internalApp = getRuntimeAppFromUrl(nextUrl)
     if (internalApp) {
-      openInternalApp(internalApp)
+      openInternalApp(internalApp, true, getRuntimeAppLaunchSuffix(nextUrl))
       return
     }
 
@@ -944,7 +950,7 @@ export default function App () {
     }
 
     if (internalApp) {
-      openInternalApp(internalApp, false)
+      openInternalApp(internalApp, false, getRuntimeAppLaunchSuffix(url))
       return
     }
 
@@ -1062,7 +1068,7 @@ export default function App () {
     setStatus('Browser home')
   }
 
-  function openInternalApp (app: RuntimeTab, shouldCommit = true) {
+  function openInternalApp (app: RuntimeTab, shouldCommit = true, launchSuffix = '') {
     const appUrl = getRuntimeAppUrl(app)
     cancelPendingBrowserLoad()
     setActiveTab(app)
@@ -1073,6 +1079,32 @@ export default function App () {
       commitBrowserEntry(appUrl, { kind: 'app', app })
     } else {
       replaceBrowserEntry(appUrl, { kind: 'app', app })
+    }
+
+    if (app === 'peertunes') {
+      setPeertunesLaunchSuffix(launchSuffix)
+      void ensurePeerTunesServer()
+    }
+  }
+
+  async function ensurePeerTunesServer () {
+    setPeertunesError(null)
+
+    try {
+      const response = await callRpc(RPC_PEERTUNES_START, {})
+
+      if (!response.ok || !response.localUrl) {
+        const message = response.error || 'Failed starting PeerTunes'
+        setPeertunesError(message)
+        setStatus(message)
+        return
+      }
+
+      setPeertunesUrl(response.localUrl)
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      setPeertunesError(message)
+      setStatus(message)
     }
   }
 
@@ -2819,7 +2851,19 @@ export default function App () {
                   soundsEnabled={peerChatNotifications.soundsEnabled}
                 />
                 )
-              : (
+              : activeTab === 'peertunes'
+                ? (
+                  <PeerTunesScreen
+                    error={peertunesError}
+                    isDark={browserIsDark}
+                    launchSuffix={peertunesLaunchSuffix}
+                    localUrl={peertunesUrl}
+                    onEnsureServer={() => void ensurePeerTunesServer()}
+                    onOpenUrl={(targetUrl) => void loadBrowserUrl(targetUrl)}
+                    onStatus={setStatus}
+                  />
+                  )
+                : (
               <ScrollView
                 style={[
                   styles.browserContentPage,

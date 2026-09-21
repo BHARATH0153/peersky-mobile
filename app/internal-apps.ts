@@ -4,16 +4,18 @@ import {
   INTERNAL_APPS as INTERNAL_APP_REGISTRY,
   canUseP2pAppPageActions as canUseP2pAppRegistryPageActions,
   getRuntimeAppFromUrl as getRuntimeAppFromRegistryUrl,
+  getRuntimeAppLaunchSuffix as getRuntimeAppRegistryLaunchSuffix,
   getRuntimeAppTitle as getRuntimeAppRegistryTitle,
   getRuntimeAppUrl as getRuntimeAppRegistryUrl
 } from './internal-apps-registry.mjs'
 
-export type RuntimeTab = 'hyper' | 'holesail' | 'p2pmd' | 'peerchat'
+export type RuntimeTab = 'hyper' | 'holesail' | 'p2pmd' | 'peerchat' | 'peertunes'
 
 const INTERNAL_APP_ICONS: Partial<Record<RuntimeTab, ImageSourcePropType>> = {
   hyper: require('../assets/images/hyperdrive.png'),
   p2pmd: require('../assets/images/p2pmd.png'),
-  peerchat: require('../assets/images/peerchat.png')
+  peerchat: require('../assets/images/peerchat.png'),
+  peertunes: require('../assets/images/peertunes.png')
 }
 
 export const BROWSER_HOME_ICON: ImageSourcePropType = require('../assets/images/icon.png')
@@ -42,6 +44,10 @@ export function getRuntimeAppTitle (app: RuntimeTab) {
 
 export function canUseP2pAppPageActions (app: RuntimeTab, targetUrl: string) {
   return canUseP2pAppRegistryPageActions(app, targetUrl)
+}
+
+export function getRuntimeAppLaunchSuffix (targetUrl: string) {
+  return getRuntimeAppRegistryLaunchSuffix(targetUrl) as string
 }
 
 export function getRuntimeAppIconSource (app: RuntimeTab) {

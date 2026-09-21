@@ -322,6 +322,7 @@ describe('internal app route registry', () => {
       'peersky://p2p/hyperdrive/',
       'peersky://p2p/p2pmd/',
       'peersky://p2p/peerchat/',
+      'peersky://p2p/peertunes/',
       'peersky://holesail/'
     ])
 
@@ -329,6 +330,7 @@ describe('internal app route registry', () => {
     assert.equal(getRuntimeAppUrl('peerchat'), 'peersky://p2p/peerchat/')
     assert.equal(getRuntimeAppUrl('holesail'), 'peersky://holesail/')
     assert.equal(getRuntimeAppUrl('hyper'), 'peersky://p2p/hyperdrive/')
+    assert.equal(getRuntimeAppUrl('peertunes'), 'peersky://p2p/peertunes/')
     assert.equal(getRuntimeAppUrl('unknown'), 'peersky://p2p/p2pmd/')
   })
 
@@ -348,6 +350,7 @@ describe('internal app route registry', () => {
     assert.equal(getRuntimeAppTitle('peerchat'), 'PeerChat')
     assert.equal(getRuntimeAppTitle('holesail'), 'Holesail')
     assert.equal(getRuntimeAppTitle('hyper'), 'Hyperdrive')
+    assert.equal(getRuntimeAppTitle('peertunes'), 'PeerTunes')
   })
 
   test('enables page actions only for registered p2p app routes', () => {
