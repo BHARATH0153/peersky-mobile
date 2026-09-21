@@ -24,8 +24,11 @@ export async function preparePeerChatNotifications () {
       name: 'PeerChat messages',
       description: 'New PeerChat message notifications',
       importance: Notifications.AndroidImportance.HIGH,
-      showBadge: true,
-      sound: 'default'
+      showBadge: true
+      // No sound key here on purpose. For an Android channel, omitting it means
+      // the system default notification sound, null means silent, and any
+      // string is looked up as a bundled sound file. Passing 'default' made it
+      // hunt for a file by that name and log a console error on every launch.
     }),
     Notifications.setNotificationChannelAsync(PEERCHAT_SILENT_CHANNEL, {
       name: 'PeerChat messages (silent)',
