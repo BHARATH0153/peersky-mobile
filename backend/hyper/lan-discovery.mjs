@@ -2,6 +2,9 @@ import HyperDHTmDNS from '@p2plabs/hyperdht-mdns'
 import { createMobileMDNSOptions } from './mobile-mdns.mjs'
 
 const DEFAULT_DISCOVERY_SETTLE_MS = 500
+const FALLBACK_PORT_ATTEMPTS = 5
+const FALLBACK_PORT_MIN = 49800
+const FALLBACK_PORT_MAX = 60000
 const READINESS_BARRIER = Symbol.for('peersky.hyperdht-mdns.readiness-barrier')
 
 let lan = null
@@ -45,32 +48,68 @@ async function openLANDiscovery (runtime, options) {
   const host = lanOptions.host || HyperDHTmDNS.selectLocalIPv4()
   const mdnsOptions = lanOptions.mdnsOptions || createMobileMDNSOptions(host)
   const keyPair = runtime?.swarm?.keyPair
-  let next = null
 
-  try {
-    next = createLAN({
-      ...lanOptions,
-      host,
-      mdnsOptions,
-      ...(keyPair ? { keyPair } : {})
-    })
-    addLANReadinessBarrier(next, options.readinessBarrierOptions)
-    wireLANEvents(next, logger)
-    await next.ready()
-    lan = next
-    attachedRuntime = null
-    updateAvailableStatus()
-  } catch (error) {
-    lan = null
-    attachedRuntime = null
-    status = unavailableStatus(error)
-    logger.warn(`[LAN] Local discovery unavailable: ${errorMessage(error)}`)
-    if (next && !next.destroyed) {
-      await next.destroy().catch((cleanupError) => {
-        logger.warn(`[LAN] Cleanup failed: ${errorMessage(cleanupError)}`)
+  // The LAN DHT binds a fixed UDP port (49799) by default, so a second PeerSky
+  // on the same machine loses the race and gets no local discovery at all. That
+  // is the normal developer setup: desktop running next to a simulator. Fall
+  // back to an ephemeral port, which still works because the bound port is what
+  // gets advertised over mDNS.
+  const attempt = async (port) => {
+    let next = null
+    try {
+      next = createLAN({
+        ...lanOptions,
+        host,
+        mdnsOptions,
+        ...(port === undefined ? {} : { port }),
+        ...(keyPair ? { keyPair } : {})
       })
+      addLANReadinessBarrier(next, options.readinessBarrierOptions)
+      wireLANEvents(next, logger)
+      await next.ready()
+      lan = next
+      attachedRuntime = null
+      updateAvailableStatus()
+      return null
+    } catch (error) {
+      lan = null
+      attachedRuntime = null
+      if (next && !next.destroyed) {
+        await next.destroy().catch((cleanupError) => {
+          logger.warn(`[LAN] Cleanup failed: ${errorMessage(cleanupError)}`)
+        })
+      }
+      return error
     }
   }
+
+  let failure = await attempt(lanOptions.port)
+  if (!failure) return
+
+  // The LAN DHT is a bootstrapper, so it needs a concrete port; port 0 is
+  // rejected outright. Walk a few random high ports instead of giving up.
+  if (lanOptions.port === undefined && isPortInUseError(failure)) {
+    const pickPort = options.pickFallbackPort || randomLANPort
+    for (let tries = 0; tries < FALLBACK_PORT_ATTEMPTS; tries++) {
+      const port = pickPort()
+      logger.warn(`[LAN] ${errorMessage(failure)} Retrying on port ${port}.`)
+      failure = await attempt(port)
+      if (!failure) return
+      if (!isPortInUseError(failure)) break
+    }
+  }
+
+  status = unavailableStatus(failure)
+  logger.warn(`[LAN] Local discovery unavailable: ${errorMessage(failure)}`)
+}
+
+function randomLANPort () {
+  return FALLBACK_PORT_MIN + Math.floor(Math.random() * (FALLBACK_PORT_MAX - FALLBACK_PORT_MIN + 1))
+}
+
+function isPortInUseError (error) {
+  const message = errorMessage(error).toLowerCase()
+  return message.includes('already in use') || message.includes('eaddrinuse')
 }
 
 export function getLANDiscoveryStatus () {

@@ -266,6 +266,42 @@ describe('Hyper LAN discovery', () => {
       '[LAN] Local discovery unavailable: Wi-Fi multicast unavailable'
     ])
   })
+  it('retries on an ephemeral port when the fixed LAN port is taken', async () => {
+    // A desktop PeerSky on the same machine already holds the default port, so
+    // the first attempt fails and the second must bind whatever the OS gives us.
+    const requestedPorts = []
+    const status = await startLANDiscovery(null, {
+      pickFallbackPort: () => 51234,
+      createLAN: (options) => {
+        requestedPorts.push(options.port)
+        return options.port === 51234
+          ? new FakeLAN('192.168.1.25', 51234)
+          : new FakeLAN('192.168.1.25', 49799, new Error(
+            'LAN DHT port 49799 is already in use. Choose a different fixed port for another local instance.'
+          ))
+      },
+      logger: { warn () {} }
+    })
+
+    assert.deepEqual(requestedPorts, [undefined, 51234])
+    assert.equal(status.available, true)
+    assert.equal(status.port, 51234)
+  })
+
+  it('gives up without retrying when a caller pinned the LAN port', async () => {
+    const requestedPorts = []
+    const status = await startLANDiscovery(null, {
+      lanOptions: { port: 49799 },
+      createLAN: (options) => {
+        requestedPorts.push(options.port)
+        return new FakeLAN('192.168.1.25', 49799, new Error('address already in use'))
+      },
+      logger: { warn () {} }
+    })
+
+    assert.deepEqual(requestedPorts, [49799])
+    assert.equal(status.available, false)
+  })
 })
 
 class FakeLAN extends EventEmitter {
