@@ -641,7 +641,12 @@ export default function App () {
 
   useEffect(() => {
     if (!pendingRestoredUrl) return
-    if (isHyperUrl(pendingRestoredUrl) && (isBooting || !rpcRef.current)) return
+    // Built-in apps talk to the Bare worklet as soon as they open, so they have
+    // to wait for it exactly like hyper:// does. Without this a restored
+    // PeerTunes tab hit "Worklet is not ready" on every cold start.
+    const needsWorklet = isHyperUrl(pendingRestoredUrl) ||
+      getRuntimeAppFromUrl(pendingRestoredUrl) !== null
+    if (needsWorklet && (isBooting || !rpcRef.current)) return
 
     const restoredUrl = pendingRestoredUrl
     setPendingRestoredUrl(null)
@@ -1267,6 +1272,9 @@ export default function App () {
 
     if (entry.source.kind === 'app') {
       setActiveTab(entry.source.app)
+      if (entry.source.app === 'peertunes') {
+        setPeertunesLaunchSuffix(getRuntimeAppLaunchSuffix(entry.url))
+      }
     } else {
       setActiveTab('hyper')
     }

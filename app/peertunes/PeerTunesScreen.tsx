@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { ActivityIndicator, AppState, StyleSheet, Text, View } from 'react-native'
+import { ActivityIndicator, AppState, Pressable, StyleSheet, Text, View } from 'react-native'
 import { WebView } from 'react-native-webview'
 
 import { createPeerTunesPageUrl, isPeerTunesPageRequest } from './peertunes-screen.mjs'
@@ -48,6 +48,13 @@ export function PeerTunesScreen ({
     return (
       <View style={styles.centered}>
         <Text style={[styles.message, isDark ? styles.messageDark : null]}>{error}</Text>
+        <Pressable
+          accessibilityRole='button'
+          onPress={() => recover('a retry')}
+          style={styles.retry}
+        >
+          <Text style={styles.retryText}>Try again</Text>
+        </Pressable>
       </View>
     )
   }
@@ -56,6 +63,7 @@ export function PeerTunesScreen ({
     return (
       <View style={styles.centered}>
         <ActivityIndicator size='small' />
+        <Text style={[styles.message, isDark ? styles.messageDark : null]}>Starting PeerTunes...</Text>
       </View>
     )
   }
@@ -79,6 +87,10 @@ export function PeerTunesScreen ({
       style={styles.webView}
       onShouldStartLoadWithRequest={(request) => {
         if (isPeerTunesPageRequest(request.url, localUrl)) return true
+        // Only a real top-frame navigation should leave PeerTunes. A subframe
+        // pointing elsewhere used to take the whole tab with it and stop the
+        // music, without the user touching anything.
+        if (request.isTopFrame === false) return false
         onOpenUrl(request.url)
         return false
       }}
@@ -86,8 +98,7 @@ export function PeerTunesScreen ({
       onRenderProcessGone={() => recover('a renderer restart')}
       onContentProcessDidTerminate={() => recover('a renderer restart')}
       onError={(event) => {
-        onStatus(`PeerTunes failed to load: ${event.nativeEvent.description}`)
-        onEnsureServer()
+        recover(`a load failure (${event.nativeEvent.description})`)
       }}
     />
   )
@@ -107,6 +118,20 @@ const styles = StyleSheet.create({
   },
   messageDark: {
     color: '#e6e6ea'
+  },
+  retry: {
+    alignItems: 'center',
+    backgroundColor: '#2f6fed',
+    borderRadius: 10,
+    justifyContent: 'center',
+    marginTop: 16,
+    minHeight: 44,
+    paddingHorizontal: 24
+  },
+  retryText: {
+    color: '#ffffff',
+    fontSize: 15,
+    fontWeight: '700'
   },
   webView: {
     backgroundColor: '#0a0b0d',
