@@ -15,5 +15,16 @@ export function isPeerTunesPageRequest (requestUrl, localUrl) {
   const base = String(localUrl || '').replace(/\/+$/, '')
   if (!base) return false
 
-  return value === base || value.startsWith(`${base}/`)
+  // Compare parsed origins rather than string prefixes. A prefix test rejects
+  // same-origin URLs that carry only a query or a fragment, which ejected the
+  // user out of the app, and it is fussy about scheme case.
+  try {
+    const target = new URL(value)
+    const expected = new URL(base)
+    return target.protocol === expected.protocol &&
+      target.hostname === expected.hostname &&
+      target.port === expected.port
+  } catch {
+    return false
+  }
 }

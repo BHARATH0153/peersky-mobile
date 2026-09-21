@@ -85,6 +85,30 @@ jobs:
       - name: Fetch content-blocking snapshot
         run: npm run update:content-blocking-snapshot
 
+      - name: Install Android NDK
+        run: |
+          # Gradle will download the NDK itself, but the archive sometimes
+          # arrives truncated and the build dies with "Archive is not a ZIP
+          # archive". Install it up front with sdkmanager, which verifies what
+          # it fetches, and read the version from Expo so this keeps following
+          # an SDK bump instead of drifting.
+          plugin='node_modules/expo-modules-autolinking/android/expo-gradle-plugin/expo-autolinking-plugin/src/main/kotlin/expo/modules/plugin/ExpoRootProjectPlugin.kt'
+          ndk_version="$(grep -oE '"ndkVersion", "[0-9.]+"' "$plugin" | grep -oE '[0-9]+(\.[0-9]+)+')"
+          if [ -z "$ndk_version" ]; then
+            echo "Could not read ndkVersion from $plugin" >&2
+            exit 1
+          fi
+          echo "Installing NDK $ndk_version"
+          for attempt in 1 2 3; do
+            if yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --install "ndk;$ndk_version"; then
+              exit 0
+            fi
+            echo "sdkmanager attempt $attempt failed, retrying"
+            sleep 15
+          done
+          echo "NDK install failed after 3 attempts" >&2
+          exit 1
+
       - name: Generate Android project
         run: npx expo prebuild --platform android --no-install
 

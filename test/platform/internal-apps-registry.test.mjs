@@ -66,3 +66,20 @@ describe('PeerTunes screen helpers', () => {
     assert.equal(isPeerTunesPageRequest('http://127.0.0.1:47317/', null), false)
   })
 })
+
+test('treats a same-origin URL as a PeerTunes page whatever shape it takes', () => {
+  const base = 'http://127.0.0.1:47317'
+
+  // A prefix test used to reject these and eject the user out of the app.
+  assert.equal(isPeerTunesPageRequest(`${base}?x=1`, base), true)
+  assert.equal(isPeerTunesPageRequest(`${base}#frag`, base), true)
+  assert.equal(isPeerTunesPageRequest(`${base}/`, base), true)
+  assert.equal(isPeerTunesPageRequest('HTTP://127.0.0.1:47317/', base), true)
+  assert.equal(isPeerTunesPageRequest('about:blank', base), true)
+
+  // And it must still refuse anything that only looks like the origin.
+  assert.equal(isPeerTunesPageRequest('http://127.0.0.1:47317.evil.com/', base), false)
+  assert.equal(isPeerTunesPageRequest('http://127.0.0.1:47318/', base), false)
+  assert.equal(isPeerTunesPageRequest('https://127.0.0.1:47317/', base), false)
+  assert.equal(isPeerTunesPageRequest('https://evil.example/', base), false)
+})

@@ -192,6 +192,8 @@ type P2pmdRoom = {
 
 type P2pmdViewMode = 'edit' | 'preview' | 'slides'
 
+const PEERTUNES_START_TIMEOUT_MS = 15000
+
 const HYPER_OFFLINE_NETWORK_COMMANDS = new Set([
   RPC_HYPER_INIT,
   RPC_HYPER_OFFLINE_KEEP,
@@ -1100,7 +1102,18 @@ export default function App () {
     setPeertunesError(null)
 
     try {
-      const response = await callRpc(RPC_PEERTUNES_START, {})
+      // Starting the loopback server is quick. callRpc itself never times out,
+      // which is right for a long hyper read but means a wedged worklet would
+      // leave this screen spinning with no way back, so bound this one call.
+      const response = await Promise.race([
+        callRpc(RPC_PEERTUNES_START, {}),
+        new Promise<never>((_resolve, reject) => {
+          setTimeout(
+            () => reject(new Error('PeerTunes took too long to start. Try again.')),
+            PEERTUNES_START_TIMEOUT_MS
+          )
+        })
+      ])
 
       if (!response.ok || !response.localUrl) {
         const message = response.error || 'Failed starting PeerTunes'
@@ -1110,6 +1123,12 @@ export default function App () {
       }
 
       setPeertunesUrl(response.localUrl)
+
+      // The library lives in this origin's IndexedDB, so a different port means
+      // an empty library. Say so rather than letting the music look lost.
+      if (response.usingFallbackPort) {
+        setStatus('PeerTunes started on a temporary port, so your saved library is not available')
+      }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
       setPeertunesError(message)

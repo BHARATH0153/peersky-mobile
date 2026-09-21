@@ -75,6 +75,9 @@ export function PeerTunesScreen ({
       key={`${pageUrl}:${reloadNonce}`}
       ref={webViewRef}
       source={{ uri: pageUrl }}
+      // This view only ever shows the loopback app, so pin it. The navigation
+      // handler below is the real gate; this is the second layer behind it.
+      originWhitelist={[localUrl]}
       allowsInlineMediaPlayback={true}
       allowsProtectedMedia={true}
       androidLayerType='hardware'

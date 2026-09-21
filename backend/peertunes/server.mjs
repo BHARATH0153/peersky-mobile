@@ -61,20 +61,25 @@ export async function startPeerTunesServer () {
     }
 
     let bound
+    let usingFallbackPort = false
     try {
       bound = await bindServer(options, PEERTUNES_LOOPBACK_PORT)
     } catch (error) {
       // Something else holds the fixed port. The app still works, but the
-      // library saved under this origin will not carry over to the next launch.
+      // library lives in the origin's IndexedDB, so a different port means the
+      // user opens an empty library. Say so rather than letting it look like
+      // their music vanished.
       console.warn('[peertunes] Fixed loopback port unavailable, using a random port:', error?.message || error)
       bound = await bindServer(options, 0)
+      usingFallbackPort = true
     }
 
     server = bound.instance
     serverInfo = {
       host: PEERTUNES_LOOPBACK_HOST,
       port: bound.port,
-      localUrl: `http://${PEERTUNES_LOOPBACK_HOST}:${bound.port}`
+      localUrl: `http://${PEERTUNES_LOOPBACK_HOST}:${bound.port}`,
+      usingFallbackPort
     }
 
     return {
@@ -83,21 +88,6 @@ export async function startPeerTunesServer () {
       ...serverInfo
     }
   })
-}
-
-export function getPeerTunesServerStatus () {
-  if (server && serverInfo) {
-    return {
-      ok: true,
-      running: true,
-      ...serverInfo
-    }
-  }
-
-  return {
-    ok: true,
-    running: false
-  }
 }
 
 export async function stopPeerTunesServer () {
@@ -111,9 +101,12 @@ export async function stopPeerTunesServer () {
     }
 
     const existing = server
-    server = null
-    serverInfo = null
-    await closeServer(existing)
+    try {
+      await closeServer(existing)
+    } finally {
+      server = null
+      serverInfo = null
+    }
 
     return {
       ok: true,

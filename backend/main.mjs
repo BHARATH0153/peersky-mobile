@@ -7,6 +7,7 @@ import { closeHyperOfflineDownloads } from './hyper/offline-manager.mjs'
 import { closeHyperRuntime } from './hyper/runtime.mjs'
 import { disconnectP2pmdRoom } from './p2pmd/room.mjs'
 import { closePeerChatService } from './peerchat/runtime.mjs'
+import { stopPeerTunesServer } from './peertunes/server.mjs'
 import { routeRpcRequest } from './rpc/router.mjs'
 
 const { IPC } = BareKit
@@ -34,6 +35,12 @@ Bare.on('beforeExit', async () => {
     await disconnectP2pmdRoom()
   } catch (error) {
     console.error('[p2pmd] Failed to disconnect room on beforeExit:', error)
+  }
+
+  try {
+    await stopPeerTunesServer()
+  } catch (error) {
+    console.error('[peertunes] Failed to stop the loopback server on beforeExit:', error)
   }
 
   try {
