@@ -13,6 +13,7 @@ import {
   parsePeerTunesScanRequest,
   serializeScanResult
 } from '../../app/peertunes/peertunes-screen.mjs'
+import { buildPeerChatInviteUrl, parsePeerChatInvite } from '../../app/peerchat/peerchat-invite.mjs'
 
 describe('internal app registry', () => {
   test('registers PeerTunes as a p2p app route', () => {
@@ -110,4 +111,25 @@ test('escapes scanned text before it goes back into the page', () => {
   assert.equal(serializeScanResult('a"b'), '"a\\"b"')
   assert.equal(serializeScanResult('a\u2028b'), '"a\\u2028b"')
   assert.equal(serializeScanResult('a\u2029b'), '"a\\u2029b"')
+})
+
+test('round-trips PeerChat invite links and refuses anything else', () => {
+  const key = 'a1b2c3d4'.repeat(8)
+  const link = buildPeerChatInviteUrl(key)
+
+  assert.equal(link, `peersky://p2p/peerchat/#room=${key}`)
+  assert.equal(parsePeerChatInvite(link), key)
+
+  // A scanned QR may hold the bare key rather than a link, and case varies.
+  assert.equal(parsePeerChatInvite(key.toUpperCase()), key)
+  assert.equal(parsePeerChatInvite(`#room=${key.toUpperCase()}`), key)
+
+  // The browser shell hands PeerChat the fragment as a launch suffix.
+  assert.equal(getRuntimeAppFromUrl(link), 'peerchat')
+  assert.equal(parsePeerChatInvite(getRuntimeAppLaunchSuffix(link)), key)
+
+  for (const bad of ['', 'peersky://p2p/peerchat/', 'peersky://p2p/peerchat/#room=nope', 'https://evil.example/#room=' + key.slice(0, 63), 'not a link']) {
+    assert.equal(parsePeerChatInvite(bad), '', `${bad} should not parse`)
+  }
+  assert.equal(buildPeerChatInviteUrl('short'), '')
 })
