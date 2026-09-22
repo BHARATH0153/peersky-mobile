@@ -354,6 +354,9 @@ export function PeerChatScreen ({
   const [searchQuery, setSearchQuery] = useState('')
   const [roomSearchQuery, setRoomSearchQuery] = useState('')
   const [showPeerChatSettings, setShowPeerChatSettings] = useState(false)
+  // A page swap inside the same sheet, not a second modal. iOS crashes when one
+  // modal is presented over another, and a back button reads better anyway.
+  const [settingsPage, setSettingsPage] = useState<'main' | 'about'>('main')
   const [showRoomInfo, setShowRoomInfo] = useState(false)
   const pendingModalRef = useRef<(() => void) | null>(null)
   const pendingModalTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -743,6 +746,7 @@ export function PeerChatScreen ({
       setProfileAvatar(profile.avatar || null)
       setLinkPreviewsEnabled(profile.linkPreview !== false)
     }
+    setSettingsPage('main')
     setShowPeerChatSettings(true)
   }
 
@@ -2311,7 +2315,13 @@ export function PeerChatScreen ({
 
           <Modal
             animationType='fade'
-            onRequestClose={() => setShowPeerChatSettings(false)}
+            onRequestClose={() => {
+              if (settingsPage === 'about') {
+                setSettingsPage('main')
+                return
+              }
+              setShowPeerChatSettings(false)
+            }}
             statusBarTranslucent
             transparent
             visible={showPeerChatSettings}
@@ -2331,7 +2341,20 @@ export function PeerChatScreen ({
                 style={[styles.roomInfoPanel, { backgroundColor: colors.surface }]}
               >
                 <View style={[styles.roomInfoHeader, { borderBottomColor: colors.border }]}>
-                  <Text style={[styles.roomInfoHeading, { color: colors.text }]}>PeerChat settings</Text>
+                  {settingsPage === 'about' && (
+                    <Pressable
+                      accessibilityLabel='Back to PeerChat settings'
+                      accessibilityRole='button'
+                      hitSlop={8}
+                      onPress={() => setSettingsPage('main')}
+                      style={styles.aboutBack}
+                    >
+                      <BackIcon width={18} height={18} color={colors.accent} />
+                    </Pressable>
+                  )}
+                  <Text style={[styles.roomInfoHeading, { color: colors.text }]}>
+                    {settingsPage === 'about' ? 'About PeerChat' : 'PeerChat settings'}
+                  </Text>
                   <Pressable
                     accessibilityLabel='Close PeerChat settings'
                     accessibilityRole='button'
@@ -2342,6 +2365,10 @@ export function PeerChatScreen ({
                     <CloseIcon width={18} height={18} color={colors.muted} />
                   </Pressable>
                 </View>
+                {settingsPage === 'about' && (
+                  <PeerChatAboutPage colors={colors} />
+                )}
+                {settingsPage === 'main' && (
                 <ScrollView keyboardShouldPersistTaps='handled' contentContainerStyle={styles.profileSettings}>
                   <View style={styles.profileRow}>
                     <Pressable
@@ -2445,44 +2472,29 @@ export function PeerChatScreen ({
                       ))}
                     </View>
                   )}
-                  <View style={styles.settingsSection}>
-                    <Text style={[styles.settingsSectionTitle, { color: colors.muted }]}>About</Text>
-                    <View style={[styles.aboutCard, { backgroundColor: colors.input }]}>
-                      <Text style={[styles.memberName, { color: colors.text }]}>PeerChat</Text>
-                      <Text style={[styles.aboutText, { color: colors.muted }]}>
-                        Chat that runs between phones, with no company in the middle. There is no
-                        sign up and no account, and nothing you send is stored on a server.
-                      </Text>
-                      <Text style={[styles.aboutText, { color: colors.muted }]}>
-                        A room lives on the phones of the people in it. Anyone you share the room
-                        key or invite link with can join, and they only see what is sent after they
-                        arrive.
-                      </Text>
-                      <Text style={[styles.aboutText, { color: colors.muted }]}>
-                        Because there is no server, messages arrive while someone in the room is
-                        online. If everyone closes the app, new messages wait until someone opens
-                        it again.
-                      </Text>
-                      <Text style={[styles.aboutText, { color: colors.muted }]}>
-                        Rude or unsafe messages are filtered automatically. You can also block
-                        someone from your profile, which stops their direct messages.
-                      </Text>
-                      <Text style={[styles.aboutVersion, { color: colors.muted }]}>
-                        Version {Constants.expoConfig?.version || 'unknown'}
-                      </Text>
+                  <Pressable
+                    accessibilityHint='Explains how PeerChat works'
+                    accessibilityRole='button'
+                    onPress={() => setSettingsPage('about')}
+                    style={[styles.preferenceRow, { backgroundColor: colors.input }]}
+                  >
+                    <View style={styles.preferenceCopy}>
+                      <Text style={[styles.memberName, { color: colors.text }]}>About PeerChat</Text>
+                      <Text style={[styles.attachmentMeta, { color: colors.muted }]}>How it works, in plain words</Text>
                     </View>
-                    <Pressable
-                      accessibilityRole='link'
-                      onPress={() => onOpenUrl(PEERCHAT_SOURCE_URL)}
-                      style={[styles.preferenceRow, { backgroundColor: colors.input }]}
-                    >
-                      <View style={styles.preferenceCopy}>
-                        <Text style={[styles.memberName, { color: colors.text }]}>Source code</Text>
-                        <Text style={[styles.attachmentMeta, { color: colors.muted }]}>PeerChat is open source</Text>
-                      </View>
-                      <Text style={[styles.preferenceState, { color: colors.accent }]}>Open</Text>
-                    </Pressable>
-                  </View>
+                    <Text style={[styles.preferenceState, { color: colors.muted }]}>›</Text>
+                  </Pressable>
+                  <Pressable
+                    accessibilityRole='link'
+                    onPress={() => onOpenUrl(PEERCHAT_SOURCE_URL)}
+                    style={[styles.preferenceRow, { backgroundColor: colors.input }]}
+                  >
+                    <View style={styles.preferenceCopy}>
+                      <Text style={[styles.memberName, { color: colors.text }]}>Source code</Text>
+                      <Text style={[styles.attachmentMeta, { color: colors.muted }]}>Anyone can read how this works</Text>
+                    </View>
+                    <Text style={[styles.preferenceState, { color: colors.accent }]}>Open</Text>
+                  </Pressable>
                   {error && <Text accessibilityRole='alert' style={[styles.modalError, { color: colors.danger }]}>{error}</Text>}
                   {(profile?.username !== profileName.trim() ||
                     (profile?.bio || '') !== profileBio.trim() ||
@@ -2501,6 +2513,7 @@ export function PeerChatScreen ({
                       </Pressable>
                   )}
                 </ScrollView>
+                )}
               </SafeAreaView>
             </KeyboardAvoidingView>
           </Modal>
@@ -3194,6 +3207,79 @@ function PeerProfileModal ({
   )
 }
 
+// Written for someone who has never heard of peer to peer. Every entry is a
+// question a real person asks in the first week. The awkward ones, deleting a
+// message and deleting an account, get a straight answer rather than a dodge,
+// and each one leads with what you get before what you give up.
+const PEERCHAT_ABOUT = [
+  {
+    q: 'Do I need an account?',
+    a: 'No, and you never will. Pick a name and start chatting. It lives on this phone, not in anyone\u2019s database.'
+  },
+  {
+    q: 'What do you know about me?',
+    a: 'Nothing at all. No tracking, no analytics, no profile of you sitting on a server somewhere, because there is no server to sit on.'
+  },
+  {
+    q: 'Who can read my messages?',
+    a: 'Only the people in the room. Everything is locked with the room key before it leaves your phone, so anyone in between sees scrambled text.'
+  },
+  {
+    q: 'Where do my messages live?',
+    a: 'On the phones of the people you are talking to, and nowhere else. Your conversation belongs to the people in it.'
+  },
+  {
+    q: 'Why can I not delete a message?',
+    a: 'Once it arrives it is on their phone, and their phone is theirs. It works the way a text message does, so it is worth a second look before you send.'
+  },
+  {
+    q: 'Can I delete my account?',
+    a: 'There is no account to delete, which is the good news. Clearing PeerSky data wipes your name and chats from this phone. Anything you already sent stays with the people you sent it to.'
+  },
+  {
+    q: 'Why did messages stop arriving?',
+    a: 'Messages hop straight between phones, so both need to be awake. Open PeerChat and anything waiting comes through.'
+  },
+  {
+    q: 'Why can I not see older messages?',
+    a: 'You start fresh from the moment you join, so nobody\u2019s old conversation follows them around.'
+  },
+  {
+    q: 'How do people join my room?',
+    a: 'Send them the invite link or the room key. Anyone who has it can join, so share it the way you would a house key.'
+  },
+  {
+    q: 'Someone is bothering me',
+    a: 'Open their profile and block them. Their direct messages stop right away, and you still share any rooms you are both in. Report sends a note to the people who build PeerChat.'
+  },
+  {
+    q: 'Does it work without internet?',
+    a: 'Yes, on the same WiFi. Phones find each other over the local network, so an outage does not stop a conversation.'
+  }
+]
+
+function PeerChatAboutPage ({ colors }: { colors: typeof lightColors }) {
+  return (
+    <ScrollView contentContainerStyle={styles.profileSettings}>
+      <Text style={[styles.aboutLead, { color: colors.text }]}>
+        PeerChat is chat between phones, and nothing more. No sign up, no company in the
+        middle, and nothing you send passes through a server.
+      </Text>
+
+      {PEERCHAT_ABOUT.map((entry) => (
+        <View key={entry.q} style={[styles.aboutCard, { backgroundColor: colors.input }]}>
+          <Text style={[styles.aboutQuestion, { color: colors.text }]}>{entry.q}</Text>
+          <Text style={[styles.aboutText, { color: colors.muted }]}>{entry.a}</Text>
+        </View>
+      ))}
+
+      <Text style={[styles.aboutVersion, { color: colors.muted }]}>
+        Version {Constants.expoConfig?.version || 'unknown'}
+      </Text>
+    </ScrollView>
+  )
+}
+
 function PeerChatMediaViewer ({
   onClose,
   target
@@ -3572,9 +3658,12 @@ const styles = StyleSheet.create({
   linkPreviewDescription: { fontSize: 11, lineHeight: 15 },
   preferenceRow: { alignItems: 'center', borderRadius: 12, flexDirection: 'row', gap: 10, padding: 11 },
   settingsSection: { gap: 8, marginTop: 6 },
-  aboutCard: { borderRadius: 12, gap: 8, padding: 12 },
+  aboutCard: { borderRadius: 12, gap: 6, padding: 12 },
+  aboutBack: { marginRight: 10, padding: 4 },
+  aboutLead: { fontSize: 14, lineHeight: 21, marginBottom: 2 },
+  aboutQuestion: { fontSize: 14, fontWeight: '600' },
   aboutText: { fontSize: 13, lineHeight: 19 },
-  aboutVersion: { fontSize: 12, marginTop: 2 },
+  aboutVersion: { fontSize: 12, marginTop: 2, textAlign: 'center' },
   settingsSectionTitle: { fontSize: 12, fontWeight: '600', letterSpacing: 0.4, textTransform: 'uppercase' },
   preferenceCopy: { flex: 1 },
   preferenceState: { fontSize: 12, fontWeight: '900' },

@@ -147,3 +147,38 @@ test('PeerChat offers the Android battery exemption after notifications are turn
   assert.match(offer, /const samsungHint = isSamsung/)
   assert.match(offer, /Sleeping apps/)
 })
+
+test('PeerChat About answers the questions a first-time user actually asks', async () => {
+  const screen = await readFile(new URL('../../app/peerchat/PeerChatScreen.tsx', import.meta.url), 'utf8')
+  const about = screen.slice(
+    screen.indexOf('const PEERCHAT_ABOUT = ['),
+    screen.indexOf('function PeerChatMediaViewer')
+  )
+
+  // The awkward ones get a straight answer rather than a dodge.
+  assert.match(about, /Why can I not delete a message\?/)
+  assert.match(about, /Can I delete my account\?/)
+  assert.match(about, /their phone is theirs/)
+  assert.match(about, /stays with the people you sent it to/)
+
+  // Privacy is the reason to pick this over anything else, so it is asked
+  // outright rather than left to be inferred.
+  assert.match(about, /What do you know about me\?/)
+  assert.match(about, /No tracking, no analytics/)
+  assert.match(about, /Who can read my messages\?/)
+
+  // And the peer to peer facts a normal person trips over.
+  assert.match(about, /both need to be awake/)
+  assert.match(about, /start fresh from the moment you join/)
+  assert.match(about, /same WiFi/)
+
+  // Source code stays in settings, not buried in About.
+  assert.doesNotMatch(about, /PEERCHAT_SOURCE_URL/)
+  assert.match(screen, /setSettingsPage\('about'\)[\s\S]{0,900}PEERCHAT_SOURCE_URL/)
+
+  // Opened as its own page inside the sheet. A second modal over the settings
+  // sheet is what crashed iOS.
+  assert.match(screen, /setSettingsPage\('about'\)/)
+  assert.match(screen, /settingsPage === 'about' && \(\s*<PeerChatAboutPage/)
+  assert.doesNotMatch(about, /<Modal/)
+})
