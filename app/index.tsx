@@ -133,6 +133,7 @@ import {
 import { HyperdriveScreen } from './hyperdrive/HyperdriveScreen'
 import { canUseNetworkForOfflineHyper } from './hyperdrive/offline-network.mjs'
 import { PeerChatScreen, type PeerChatResponse } from './peerchat/PeerChatScreen'
+import { parsePeerChatInvite } from './peerchat/peerchat-invite.mjs'
 import { usePeerChatNotifications } from './peerchat/usePeerChatNotifications'
 import { PeerTunesScreen } from './peertunes/PeerTunesScreen'
 import { peerSkyWebViewNativeConfig } from './downloads/PeerSkyWebView'
@@ -177,6 +178,7 @@ import {
   RPC_P2PMD_ROOM_JOIN,
   RPC_P2PMD_ROOM_PUBLISH,
   RPC_P2PMD_ROOM_STATUS,
+  RPC_APP_PEERCHAT_CHANGED,
   RPC_PEERTUNES_START
 } from '../backend/rpc/commands.mjs'
 
@@ -400,6 +402,7 @@ export default function App () {
   const [peertunesLaunchSuffix, setPeertunesLaunchSuffix] = useState('')
   const [peertunesError, setPeertunesError] = useState<string | null>(null)
   const [peertunesMounted, setPeertunesMounted] = useState(false)
+  const [peerChatRevision, setPeerChatRevision] = useState(0)
   const [p2pmdRoom, setP2pmdRoom] = useState<P2pmdRoom | null>(null)
   const [p2pmdEditorHtml, setP2pmdEditorHtml] = useState<string | null>(null)
   const [p2pmdJoinKey, setP2pmdJoinKey] = useState('')
@@ -680,7 +683,16 @@ export default function App () {
       const worklet = new Worklet()
       worklet.start('/app.bundle', bundle, [storageDir])
 
-      const rpc = new RPC(worklet.IPC, () => {})
+      // The backend pushes here when PeerChat changes, so a new message shows
+      // the moment it lands instead of waiting for the next poll.
+      const rpc = new RPC(worklet.IPC, (request) => {
+        if (request.command === RPC_APP_PEERCHAT_CHANGED) {
+          setPeerChatRevision((value) => value + 1)
+        }
+        try {
+          request.reply()
+        } catch {}
+      })
 
       workletRef.current = worklet
       rpcRef.current = rpc
@@ -1091,6 +1103,11 @@ export default function App () {
       commitBrowserEntry(appUrl, { kind: 'app', app })
     } else {
       replaceBrowserEntry(appUrl, { kind: 'app', app })
+    }
+
+    if (app === 'peerchat') {
+      const invited = parsePeerChatInvite(launchSuffix)
+      if (invited) setRequestedPeerChatRoomKey(invited)
     }
 
     if (app === 'peertunes') {
@@ -2872,6 +2889,7 @@ export default function App () {
               ? (
                 <PeerChatScreen
                   isDark={browserIsDark}
+                  revision={peerChatRevision}
                   notificationPreferencesReady={peerChatNotifications.isReady}
                   notificationsEnabled={peerChatNotifications.notificationsEnabled}
                   onCallRpc={(command, data = {}) => callRpc(command, data) as Promise<PeerChatResponse>}
