@@ -18,7 +18,10 @@ const INTERNAL_APP_ICONS: Partial<Record<RuntimeTab, ImageSourcePropType>> = {
   peertunes: require('../assets/images/peertunes.png')
 }
 
-export const BROWSER_HOME_ICON: ImageSourcePropType = require('../assets/images/icon.png')
+// Not icon.png: that one is the store icon and has to be fully opaque, because
+// iOS flattens any alpha onto white and shows a ring. In the app the icon sits
+// on our own surfaces and needs its transparent corners back.
+export const BROWSER_HOME_ICON: ImageSourcePropType = require('../assets/images/app-icon-transparent.png')
 
 export const INTERNAL_APPS = (INTERNAL_APP_REGISTRY as Array<{
   id: RuntimeTab
