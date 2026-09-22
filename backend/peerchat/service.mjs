@@ -53,11 +53,10 @@ import { PRE_JOINED_PEERCHAT_ROOM_KEY } from './rooms.mjs'
 
 const MAX_ROOMS = 50
 const MAX_BLOCKED_PEERS = 500
-// Desktop keys its member list by peer id and ships it whole. Avatars are left
-// out on purpose: a room of 64 people carrying data-url pictures blows past the
-// frame cap and the whole list is dropped. Pictures arrive with the profile
-// frame instead.
-const MEMBERS_LIST_CHUNK = 50
+// Desktop keys its member list by peer id. Packed by size rather than by
+// count: one frame carrying everyone's data-url picture passes the frame cap
+// once roughly nine of them have one, and an oversized line is dropped whole.
+const MEMBERS_LIST_MAX_BYTES = 192 * 1024
 const PEERCHAT_NOTIFY_DEBOUNCE_MS = 40
 const MAX_RETURNED_MESSAGES = 200
 const MAX_RETURNED_ENTRIES = 1000
@@ -1247,19 +1246,35 @@ export class PeerChatService {
     const members = room?.members || []
     if (members.length === 0) return
 
-    for (let index = 0; index < members.length; index += MEMBERS_LIST_CHUNK) {
-      const chunk = {}
-      for (const member of members.slice(index, index + MEMBERS_LIST_CHUNK)) {
-        if (!member.id || !member.username) continue
-        chunk[member.id] = {
-          username: member.username,
-          bio: member.bio || '',
-          ...(Number.isFinite(member.joinedAt) && { joinedAt: member.joinedAt })
-        }
-      }
-      if (Object.keys(chunk).length === 0) continue
-      this.sendToPeer(peer, { type: 'members-list', roomKey, members: chunk })
+    let batch = {}
+    let bytes = 0
+    const flush = () => {
+      if (Object.keys(batch).length === 0) return
+      this.sendToPeer(peer, { type: 'members-list', roomKey, members: batch })
+      batch = {}
+      bytes = 0
     }
+
+    for (const member of members) {
+      if (!member.id || !member.username) continue
+      let entry = {
+        username: member.username,
+        bio: member.bio || '',
+        avatar: member.avatar || null,
+        ...(Number.isFinite(member.joinedAt) && { joinedAt: member.joinedAt })
+      }
+      let size = member.id.length + JSON.stringify(entry).length
+      if (size > MEMBERS_LIST_MAX_BYTES) {
+        // One picture too big to travel on its own. Send the person without it
+        // rather than dropping them from the room.
+        entry = { ...entry, avatar: null }
+        size = member.id.length + JSON.stringify(entry).length
+      }
+      if (bytes + size > MEMBERS_LIST_MAX_BYTES) flush()
+      batch[member.id] = entry
+      bytes += size
+    }
+    flush()
   }
 
   mergeMembersList (roomKey, incoming) {
@@ -1277,7 +1292,12 @@ export class PeerChatService {
       if (members.length >= MAX_RETURNED_ROOM_MEMBERS - 1) break
       // joinedAt is deliberately not taken from a third party. It decides which
       // history a peer is sent, and only that peer gets to announce it.
-      members.push({ id, username, bio: normalizePeerChatBio(value?.bio), avatar: null })
+      members.push({
+        id,
+        username,
+        bio: normalizePeerChatBio(value?.bio),
+        avatar: normalizePeerChatAvatar(value?.avatar)
+      })
       known.add(id)
       changed = true
     }

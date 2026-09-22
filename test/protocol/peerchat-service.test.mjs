@@ -11,11 +11,14 @@ import {
 } from '../../backend/peerchat/service.mjs'
 import {
   derivePeerChatTopic,
-  encryptPeerChatMessage
+  encryptPeerChatMessage,
+  MAX_PEERCHAT_FRAME_BYTES
 } from '../../backend/peerchat/protocol.mjs'
 import { PRE_JOINED_PEERCHAT_ROOM_KEY } from '../../backend/peerchat/rooms.mjs'
 
 const ROOM_KEY = 'ab'.repeat(32)
+// The shape resizeImage produces: 369px JPEG, about 27 KB as a data url.
+const CAROL_AVATAR = `data:image/jpeg;base64,${'A'.repeat(27_000)}`
 
 test('PeerChat onboarding prejoins the welcome room before saving a unique profile', async (t) => {
   const storagePath = await mkdtemp(path.join(tmpdir(), 'peersky-peerchat-onboarding-'))
@@ -725,7 +728,7 @@ test('PeerChat exchanges room member lists with peers the desktop way', async (t
     type: 'members-list',
     roomKey: ROOM_KEY,
     members: {
-      cc00cc00: { username: 'Carol', bio: 'Third', avatar: null, joinedAt: 1 },
+      cc00cc00: { username: 'Carol', bio: 'Third', avatar: CAROL_AVATAR, joinedAt: 1 },
       dd00dd00: { username: 'Dave', bio: '' },
       '': { username: 'Nobody' },
       ee00ee00: { username: '' }
@@ -739,12 +742,40 @@ test('PeerChat exchanges room member lists with peers the desktop way', async (t
   // the peer is sent, and only they can announce it.
   assert.equal(service.peerJoinedAt(ROOM_KEY, 'cc00cc00'), null)
 
-  // And we hand ours back, without avatars, so the frame stays under the cap.
+  // Pictures ride along, so an offline member is not a grey circle.
+  assert.equal(service.listRooms()[0].members.find((m) => m.id === 'cc00cc00').avatar, CAROL_AVATAR)
+
+  // And we hand ours back the same way.
   service.shareMembers(peer, ROOM_KEY)
   const shared = frames.find((frame) => frame.type === 'members-list')
   assert.equal(shared.roomKey, ROOM_KEY)
   assert.equal(shared.members.cc00cc00.username, 'Carol')
-  assert.equal('avatar' in shared.members.cc00cc00, false)
+  assert.equal(shared.members.cc00cc00.avatar, CAROL_AVATAR)
+
+  // A crowded room is split so no single line is refused on the other side.
+  const crowded = []
+  service.rooms.get(ROOM_KEY).members = Array.from({ length: 64 }, (_, index) => ({
+    id: index.toString(16).padStart(8, '0'),
+    username: `Member ${index}`,
+    bio: '',
+    avatar: CAROL_AVATAR
+  }))
+  const many = createFakePeer('ff00ff00', 'Watcher', crowded)
+  service.shareMembers(many, ROOM_KEY)
+  const lists = crowded.filter((frame) => frame.type === 'members-list')
+  assert.ok(lists.length > 1, 'a crowded room has to be split')
+  const seen = new Set()
+  for (const frame of lists) {
+    assert.ok(
+      Buffer.byteLength(JSON.stringify(frame)) < MAX_PEERCHAT_FRAME_BYTES,
+      'an oversized line is dropped whole by the receiver'
+    )
+    for (const [id, member] of Object.entries(frame.members)) {
+      seen.add(id)
+      assert.equal(member.avatar, CAROL_AVATAR, 'splitting is not an excuse to drop the picture')
+    }
+  }
+  assert.equal(seen.size, 64)
   await service.close()
 })
 
