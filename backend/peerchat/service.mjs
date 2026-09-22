@@ -335,8 +335,12 @@ export class PeerChatService {
     } else if (!room.isDM || room.dmWith !== normalizedPeerId) {
       throw new Error('PeerChat direct-message room is invalid.')
     }
-    if (room.rejected) {
+    // Asking again clears both. A block that could never be retried would make
+    // the other side's unblock meaningless, and if they are still blocking us
+    // the answer comes straight back.
+    if (room.rejected || room.blockedByPeer) {
       room.rejected = false
+      room.blockedByPeer = false
       room.pendingAcceptance = true
     }
     try {
@@ -1014,6 +1018,8 @@ export class PeerChatService {
       if (directRoomKey !== expectedRoomKey || !directRoom?.isDM || directRoom.dmWith !== peer.id) return
       if (message.type === 'dm-accept') {
         directRoom.pendingAcceptance = false
+        directRoom.rejected = false
+        directRoom.blockedByPeer = false
         directRoom.name = normalizePeerChatProfileName(message.fromUsername) || directRoom.name
         directRoom.bio = normalizePeerChatBio(message.fromBio)
         directRoom.avatar = normalizePeerChatAvatar(message.fromAvatar)
@@ -1762,7 +1768,7 @@ export class PeerChatService {
     const username = normalizePeerChatProfileName(peer?.username)
     if (!room || !id || id === this.localId || !username) return false
 
-    const members = Array.isArray(room.members) ? room.members : []
+    const members = Array.isArray(room.members) ? [...room.members] : []
     const index = members.findIndex((member) => member.id === id)
     const existing = index >= 0 ? members[index] : null
     const member = {
@@ -1773,9 +1779,16 @@ export class PeerChatService {
       joinedAt: existing?.joinedAt ?? announcedJoinTs(announcedJoinedAt)
     }
     if (existing && JSON.stringify(existing) === JSON.stringify(member)) return false
-    if (!existing && members.length >= MAX_RETURNED_ROOM_MEMBERS - 1) return false
+    if (!existing && members.length >= MAX_RETURNED_ROOM_MEMBERS - 1) {
+      // Full. A name lifted out of the feed is the one worth losing: a live
+      // peer needs the slot to get their join time recorded, and without that
+      // we never sync them any history at all.
+      const feedOnly = members.findIndex((entry) => !Number.isFinite(entry.joinedAt))
+      if (feedOnly < 0) return false
+      members.splice(feedOnly, 1)
+    }
 
-    room.members = [...members]
+    room.members = members
     if (index >= 0) room.members[index] = member
     else room.members.push(member)
     return true

@@ -710,6 +710,33 @@ test('PeerChat lists everyone who has spoken in a room, not just the connected p
   await restarted.close()
 })
 
+test('PeerChat keeps room for a live member once the feed has filled the member list', async (t) => {
+  const storagePath = await mkdtemp(path.join(tmpdir(), 'peersky-peerchat-member-cap-'))
+  t.after(() => rm(storagePath, { recursive: true, force: true }))
+  const service = await new PeerChatService({ sdk: createFakeSdk(), storagePath }).start()
+  service.setProfile({ username: 'Alice' })
+  await service.joinRoom({ roomKey: ROOM_KEY })
+
+  // A long-lived shared room fills up with names lifted out of its history.
+  const room = service.rooms.get(ROOM_KEY)
+  room.members = Array.from({ length: 99 }, (_, index) => ({
+    id: index.toString(16).padStart(8, '0'),
+    username: `Ghost ${index}`,
+    bio: '',
+    avatar: null
+  }))
+
+  const joinTs = Date.now()
+  const peer = createFakePeer('aa00aa00', 'Live Peer')
+  assert.equal(service.rememberRoomMember(room, peer, joinTs), true, 'a live peer must still fit')
+
+  // Without the join time we would sync them no history at all.
+  assert.equal(service.peerJoinedAt(ROOM_KEY, peer.id), joinTs)
+  assert.equal(room.members.length, 99, 'a feed-only name gave up its slot')
+  assert.equal(room.members.some((member) => member.username === 'Ghost 0'), false)
+  await service.close()
+})
+
 test('PeerChat refuses a rename that collides with someone already in a room', async (t) => {
   const storagePath = await mkdtemp(path.join(tmpdir(), 'peersky-peerchat-rename-'))
   t.after(() => rm(storagePath, { recursive: true, force: true }))
@@ -802,6 +829,18 @@ test('PeerChat blocking stops direct messages both ways and survives a restart',
     sender.sendMessage({ roomKey: outgoing.room.roomKey, message: 'Still trying' }),
     /blocked your direct messages/
   )
+
+  // Asking again clears the flag and re-sends, otherwise an unblock on Bob's
+  // side would leave Alice permanently locked out with no way back.
+  const retried = await sender.createDirectMessage({ peerId: receiver.localId, username: 'Bob' })
+  assert.equal(retried.room.blockedByPeer, false)
+  assert.equal(retried.room.pendingAcceptance, true)
+  assert.equal(inviteFrames.at(-1)?.type, 'dm-invite', 'the retry goes back out')
+
+  // Still blocked, so the same answer comes back.
+  await receiver.handlePeerMessage(senderPeer, inviteFrames.pop())
+  await sender.handlePeerMessage(senderViewOfReceiver, blockedFrames.pop())
+  assert.equal(sender.listRooms().find((room) => room.roomKey === outgoing.room.roomKey).blockedByPeer, true)
 
   // Blocking is one way. Alice can still open the room, Bob cannot start one.
   await assert.rejects(
