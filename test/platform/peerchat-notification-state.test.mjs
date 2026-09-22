@@ -112,3 +112,36 @@ test('PeerChat only offers notification settings once the system stops asking', 
   assert.match(change, /openPeerChatNotificationSettings\(\)/)
   assert.match(change, /Alert[.]alert\(/)
 })
+
+test('PeerChat keeps its swarm announce fresh while the app sits in the background', async () => {
+  const hook = await readFile(new URL('../../app/peerchat/usePeerChatNotifications.ts', import.meta.url), 'utf8')
+  const tick = hook.slice(
+    hook.indexOf('const backgroundTickSubscription'),
+    hook.indexOf('void preparePeerChatNotifications()')
+  )
+
+  assert.match(tick, /RPC_HYPER_REFRESH/)
+  // Only while backgrounded. Foregrounding already refreshes from app/index.tsx.
+  assert.match(tick, /AppState[.]currentState === 'active'/)
+
+  const interval = hook.match(/BACKGROUND_REFRESH_INTERVAL_MS = ([^\n]+)/)
+  assert.ok(interval, 'refresh interval not found')
+  // eslint-disable-next-line no-new-func
+  const value = Function(`return (${interval[1]})`)()
+  assert.ok(value >= 5 * 60 * 1000, 'refreshing this often would drain the battery')
+})
+
+test('PeerChat offers the Android battery exemption after notifications are turned on', async () => {
+  const screen = await readFile(new URL('../../app/peerchat/PeerChatScreen.tsx', import.meta.url), 'utf8')
+  const offer = screen.slice(
+    screen.indexOf('async function offerBatteryExemption'),
+    screen.indexOf('function changeNotificationSounds')
+  )
+
+  assert.match(offer, /Platform[.]OS !== 'android'/)
+  assert.match(offer, /isPeerChatBatteryUnrestricted\(\)/)
+  assert.match(offer, /openPeerChatBatterySettings\(\)/)
+  // Samsung's sleeping-apps list is separate from the standard dialog, and it
+  // is the one that actually takes the peer offline.
+  assert.match(offer, /Sleeping apps/)
+})

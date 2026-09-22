@@ -129,8 +129,40 @@ describe('mobile platform runtime configuration', () => {
     assert.match(backgroundPlugin, /FOREGROUND_SERVICE_REMOTE_MESSAGING/)
     assert.match(backgroundPlugin, /foregroundServiceType': 'remoteMessaging'/)
     assert.match(backgroundService, /startForeground\(NOTIFICATION_ID, notification\)/)
-    assert.match(backgroundService, /HEARTBEAT_INTERVAL_MS/)
-    assert.match(backgroundService, /START_NOT_STICKY/)
+    // Sticky, so one reclaim on a low-memory phone is not permanent.
+    assert.match(backgroundService, /return START_STICKY/)
+    assert.doesNotMatch(backgroundService, /START_NOT_STICKY/)
+    assert.match(backgroundService, /onTaskRemoved/)
+    // A one-minute sweep. Messages arrive over the live connection; a five
+    // second wakeup loop is what an aggressive power manager kills first.
+    const heartbeat = backgroundService.match(/HEARTBEAT_INTERVAL_MS = ([0-9_]+)L/)
+    assert.ok(heartbeat, 'heartbeat interval not found')
+    assert.ok(Number(heartbeat[1].replaceAll('_', '')) >= 60_000, 'heartbeat is too frequent')
+
+    // A reboot or an app update must not end the background connection.
+    assert.match(backgroundPlugin, /RECEIVE_BOOT_COMPLETED/)
+    assert.match(backgroundPlugin, /PeerChatBootReceiver[.]kt/)
+    const bootReceiver = await readFile(
+      repoFile('plugins/templates/PeerChatBootReceiver.kt.template'),
+      'utf8'
+    )
+    assert.match(bootReceiver, /ACTION_BOOT_COMPLETED/)
+    assert.match(bootReceiver, /isWanted\(context\)/)
+    // The system broadcasts from its own uid, so a non-exported receiver never
+    // runs. Both actions are protected broadcasts and cannot be forged.
+    const { addPeerChatBackgroundManifest } = await import('../../plugins/with-peerchat-background.js')
+    const manifest = addPeerChatBackgroundManifest({ application: [{}] })
+    const receiver = manifest.application[0].receiver
+      .find((entry) => entry.$['android:name'] === '.PeerChatBootReceiver')
+    assert.equal(receiver.$['android:exported'], 'true')
+    assert.deepEqual(
+      receiver['intent-filter'][0].action.map((entry) => entry.$['android:name']),
+      ['android.intent.action.BOOT_COMPLETED', 'android.intent.action.MY_PACKAGE_REPLACED']
+    )
+
+    // Samsung's sleeping apps layer sits above Doze, so this is asked for too.
+    assert.match(backgroundModule, /isIgnoringBatteryOptimizations/)
+    assert.match(backgroundModule, /ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS/)
     assert.match(backgroundModule, /SoundPool[.]Builder/)
     assert.match(backgroundModule, /USAGE_ASSISTANCE_SONIFICATION/)
     assert.match(backgroundModule, /PeerChatBackgroundTick/)
