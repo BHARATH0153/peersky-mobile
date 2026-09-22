@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import { readFile } from 'node:fs/promises'
 import { describe, test } from 'node:test'
 import {
   INTERNAL_APPS,
@@ -132,4 +133,47 @@ test('round-trips PeerChat invite links and refuses anything else', () => {
     assert.equal(parsePeerChatInvite(bad), '', `${bad} should not parse`)
   }
   assert.equal(buildPeerChatInviteUrl('short'), '')
+})
+
+test('a link tapped inside a built-in app opens beside it, not over it', async () => {
+  const app = await readFile(new URL('../../app/index.tsx', import.meta.url), 'utf8')
+  const helper = app.slice(
+    app.indexOf('function openBrowserUrlInNewTab'),
+    app.indexOf('function onBrowserNewTab')
+  )
+
+  // Falls back to the current tab only when there is no room for another one,
+  // so the link still opens rather than silently doing nothing.
+  assert.match(helper, /createBrowserTab\(targetUrl\)/)
+  assert.match(helper, /loadBrowserUrl\(targetUrl\)/)
+
+  // PeerChat and PeerTunes both lose their state if the tab is taken over.
+  const peerChat = app.slice(app.indexOf('<PeerChatScreen'), app.indexOf('requestedRoomKey='))
+  assert.match(peerChat, /onOpenUrl=\{\(targetUrl\) => openBrowserUrlInNewTab\(targetUrl\)\}/)
+  const peerTunes = app.slice(app.indexOf('<PeerTunesScreen'), app.indexOf('onStatus={setStatus}', app.indexOf('<PeerTunesScreen')))
+  assert.match(peerTunes, /onOpenUrl=\{\(targetUrl\) => openBrowserUrlInNewTab\(targetUrl\)\}/)
+})
+
+test('a room is shared as an invite link, and a direct message has nothing to share', async () => {
+  const screen = await readFile(new URL('../../app/peerchat/PeerChatScreen.tsx', import.meta.url), 'utf8')
+  const start = screen.indexOf('async function shareRoom ()')
+  const share = screen.slice(start, screen.indexOf('\n  }', start))
+
+  // The bare key has to be pasted into Join Room by hand; the link just joins.
+  assert.match(share, /buildPeerChatInviteUrl\(activeRoom[.]roomKey\)/)
+
+  // There is nobody to invite into a one-to-one chat.
+  assert.match(screen, /\{!activeRoom[.]isDM && \(\s*<Pressable[\s\S]{0,260}Share room/)
+})
+
+test('creating or joining a room closes the panel behind it', async () => {
+  const screen = await readFile(new URL('../../app/peerchat/PeerChatScreen.tsx', import.meta.url), 'utf8')
+  for (const [name, next] of [
+    ['function createRoom ()', 'async function joinRoomByKey'],
+    ['async function joinRoomByKey', 'function isMemberBlocked'],
+    ['function joinRoom ()', 'function showRoomActions']
+  ]) {
+    const body = screen.slice(screen.indexOf(name), screen.indexOf(next))
+    assert.match(body, /setLandingAction\(null\)/, `${name} leaves the panel open`)
+  }
 })

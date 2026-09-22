@@ -1093,6 +1093,9 @@ export function PeerChatScreen ({
       setRoomAbuseFilter(true)
       setRoomNsfwFilter(true)
       setRoomSpamRateLimit(10)
+      // The form has done its job. Leaving it open means coming back from the
+      // room to a half-filled panel that looks like nothing happened.
+      setLandingAction(null)
       openRoom(response.room)
       onStatus('PeerChat room created')
     })
@@ -1113,6 +1116,7 @@ export function PeerChatScreen ({
         ...current.filter((room) => room.roomKey !== response.room?.roomKey)
       ])
       setJoinKey('')
+      setLandingAction(null)
       openRoom(response.room)
       onStatus('PeerChat room joined')
     })
@@ -1213,6 +1217,7 @@ export function PeerChatScreen ({
         ...current.filter((room) => room.roomKey !== response.room?.roomKey)
       ])
       setJoinKey('')
+      setLandingAction(null)
       openRoom(response.room)
       onStatus('PeerChat room joined')
     })
@@ -1338,9 +1343,11 @@ export function PeerChatScreen ({
   async function shareRoom () {
     if (!activeRoom) return
     try {
+      // The link, not the bare key. Tapping it joins the room; a 64 character
+      // key has to be copied into Join Room by hand.
       await Share.share({
         title: `Join ${activeRoom.name} on PeerChat`,
-        message: activeRoom.roomKey
+        message: buildPeerChatInviteUrl(activeRoom.roomKey) || activeRoom.roomKey
       })
     } catch (cause) {
       if (!mountedRef.current) return
@@ -1585,14 +1592,17 @@ export function PeerChatScreen ({
                 ? <CloseIcon width={CHAT_HEADER_ICON_SIZE} height={CHAT_HEADER_ICON_SIZE} color={colors.accent} />
                 : <SearchIcon width={CHAT_HEADER_ICON_SIZE} height={CHAT_HEADER_ICON_SIZE} color={colors.accent} />}
             </Pressable>
-            <Pressable
-              accessibilityLabel='Share room'
-              accessibilityRole='button'
-              onPress={() => void shareRoom()}
-              style={styles.headerAction}
-            >
-              <ShareIcon width={CHAT_HEADER_ICON_SIZE} height={CHAT_HEADER_ICON_SIZE} color={colors.accent} />
-            </Pressable>
+            {!activeRoom.isDM && (
+              <Pressable
+                accessibilityHint='Shares a link that joins this room'
+                accessibilityLabel='Share room'
+                accessibilityRole='button'
+                onPress={() => void shareRoom()}
+                style={styles.headerAction}
+              >
+                <ShareIcon width={CHAT_HEADER_ICON_SIZE} height={CHAT_HEADER_ICON_SIZE} color={colors.accent} />
+              </Pressable>
+            )}
           </View>
         </View>
 

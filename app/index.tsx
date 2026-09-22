@@ -1344,6 +1344,14 @@ export default function App () {
     return true
   }
 
+  // A link tapped inside one of the built-in apps is leaving that app. Opening
+  // it over the top loses the chat you were reading or stops the music, so it
+  // gets its own tab and the app stays where it was.
+  function openBrowserUrlInNewTab (targetUrl: string) {
+    if (createBrowserTab(targetUrl)) return
+    void loadBrowserUrl(targetUrl)
+  }
+
   function onBrowserNewTab () {
     if (!createBrowserTab()) return
     setStatus('New tab')
@@ -2896,7 +2904,7 @@ export default function App () {
                   onNotificationsEnabledChange={peerChatNotifications.setNotificationsEnabled}
                   onOpenLocalFile={openBrowserLocalFile}
                   onRequestedRoomHandled={() => setRequestedPeerChatRoomKey(null)}
-                  onOpenUrl={(targetUrl) => void loadBrowserUrl(targetUrl)}
+                  onOpenUrl={(targetUrl) => openBrowserUrlInNewTab(targetUrl)}
                   onSoundsEnabledChange={peerChatNotifications.setSoundsEnabled}
                   onStatus={setStatus}
                   requestedRoomKey={requestedPeerChatRoomKey}
@@ -3206,7 +3214,7 @@ export default function App () {
               launchSuffix={peertunesLaunchSuffix}
               localUrl={peertunesUrl}
               onEnsureServer={() => void ensurePeerTunesServer()}
-              onOpenUrl={(targetUrl) => void loadBrowserUrl(targetUrl)}
+              onOpenUrl={(targetUrl) => openBrowserUrlInNewTab(targetUrl)}
               onStatus={setStatus}
             />
           </View>
