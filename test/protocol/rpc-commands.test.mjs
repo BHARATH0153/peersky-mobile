@@ -37,7 +37,9 @@ import {
   RPC_PEERCHAT_ROOM_PIN,
   RPC_PEERCHAT_ROOM_MUTE,
   RPC_PEERCHAT_ROOM_UPDATE,
-  RPC_PEERCHAT_ONBOARD
+  RPC_PEERCHAT_ONBOARD,
+  RPC_PEERCHAT_BLOCK,
+  RPC_PEERCHAT_UNBLOCK
 } from '../../backend/rpc/commands.mjs'
 
 test('Hyper storage and LAN discovery use distinct RPC command IDs', () => {
@@ -126,4 +128,31 @@ test('PeerChat RPC commands use a dedicated command range', () => {
 
   assert.deepEqual(commands, [40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58])
   assert.equal(new Set(commands).size, commands.length)
+})
+
+test('PeerChat blocking RPC commands route to the service and stay clear of the hyper range', async () => {
+  const commands = [RPC_PEERCHAT_BLOCK, RPC_PEERCHAT_UNBLOCK]
+  assert.deepEqual(commands, [66, 67])
+  assert.equal(new Set([...commands, RPC_HYPER_OFFLINE_LIST, RPC_HYPER_OFFLINE_REMOVE]).size, 4)
+
+  const router = await readFile(
+    new URL('../../backend/rpc/router.mjs', import.meta.url),
+    'utf8'
+  )
+  assert.match(router, /req[.]command === RPC_PEERCHAT_BLOCK/)
+  assert.match(router, /peerChat[.]blockPeer[(]parseJsonMessage[(]req[.]data[)][)]/)
+  assert.match(router, /req[.]command === RPC_PEERCHAT_UNBLOCK/)
+  assert.match(router, /peerChat[.]unblockPeer[(]parseJsonMessage[(]req[.]data[)][)]/)
+
+  // The screen seeds its blocked list from these two, so both must carry it.
+  const initRoute = router.slice(
+    router.indexOf('req.command === RPC_PEERCHAT_INIT'),
+    router.indexOf('req.command === RPC_PEERCHAT_PROFILE_SET')
+  )
+  const roomsRoute = router.slice(
+    router.indexOf('req.command === RPC_PEERCHAT_ROOMS'),
+    router.indexOf('req.command === RPC_PEERCHAT_BLOCK')
+  )
+  assert.match(initRoute, /blockedPeers: peerChat[.]listBlockedPeers[(][)]/)
+  assert.match(roomsRoute, /blockedPeers: peerChat[.]listBlockedPeers[(][)]/)
 })

@@ -174,16 +174,44 @@ test('PeerChat stores, toggles, and history-syncs desktop-compatible reactions',
   let snapshot = await service.getSnapshot({ roomKey: room.roomKey, version: -1 })
   assert.deepEqual(snapshot.messages[0].reactions, [{ emoji: '👍', count: 1, self: true }])
 
-  const frames = []
+  const syncTo = async (peerId, joinedAt) => {
+    const frames = []
+    const stored = service.rooms.get(room.roomKey)
+    service.rememberRoomMember(stored, { id: peerId, username: peerId }, joinedAt)
+    await service.syncHistoryToPeer({
+      id: peerId,
+      connection: { destroyed: false },
+      rooms: [room.roomKey],
+      transport: {
+        send: (frame) => frames.push(JSON.parse(frame)) || true,
+        close () {}
+      }
+    }, room.roomKey)
+    return frames.map((frame) => frame.type)
+  }
+
+  // A member who was already here gets everything they missed.
+  assert.deepEqual(await syncTo('aaaaaaaa', 1), ['sync', 'sync-reaction', 'sync-done'])
+
+  // Someone joining after the message starts with an empty room instead of
+  // inheriting a backlog they were never part of. Let the clock move on first:
+  // a join time in the same millisecond as the message counts as having been
+  // there for it, and a future one is clamped back to now.
+  await new Promise((resolve) => setTimeout(resolve, 5))
+  assert.deepEqual(await syncTo('bbbbbbbb', Date.now()), ['sync-done'])
+
+  // And a peer who has not said when they joined gets nothing either.
+  const unknownFrames = []
   await service.syncHistoryToPeer({
+    id: 'cccccccc',
     connection: { destroyed: false },
     rooms: [room.roomKey],
     transport: {
-      send: (frame) => frames.push(JSON.parse(frame)) || true,
+      send: (frame) => unknownFrames.push(JSON.parse(frame)) || true,
       close () {}
     }
   }, room.roomKey)
-  assert.deepEqual(frames.map((frame) => frame.type), ['sync', 'sync-reaction', 'sync-done'])
+  assert.deepEqual(unknownFrames.map((frame) => frame.type), ['sync-done'])
 
   await service.reactToMessage({ roomKey: room.roomKey, msgId: sent.id, emoji: '' })
   snapshot = await service.getSnapshot({ roomKey: room.roomKey, version: -1 })
@@ -646,6 +674,150 @@ test('PeerChat verifies and completes desktop-compatible direct-message invitati
 
   await sender.close()
   await restartedReceiver.close()
+})
+
+test('PeerChat lists everyone who has spoken in a room, not just the connected peers', async (t) => {
+  const storagePath = await mkdtemp(path.join(tmpdir(), 'peersky-peerchat-members-'))
+  t.after(() => rm(storagePath, { recursive: true, force: true }))
+  const service = await new PeerChatService({ sdk: createFakeSdk(), storagePath }).start()
+  service.setProfile({ username: 'Alice' })
+  await service.joinRoom({ roomKey: ROOM_KEY })
+
+  const peer = createFakePeer('bb00bb00', 'Bob')
+  service.peers.set(peer.connection, peer)
+  await service.handlePeerMessage(peer, {
+    id: 'from-bob',
+    roomKey: ROOM_KEY,
+    sn: 'Bob',
+    ...encryptPeerChatMessage('Hello from Bob', ROOM_KEY),
+    ts: Date.now()
+  })
+
+  // Bob walks away. Desktop still shows him in the room, so mobile has to too.
+  service.peers.delete(peer.connection)
+  const snapshot = await service.getSnapshot({ roomKey: ROOM_KEY, version: -1 })
+  const bob = snapshot.room.members.find((member) => member.username === 'Bob')
+  assert.equal(bob?.online, false)
+  assert.equal(snapshot.room.members[0].self, true)
+
+  // Remembering him must not hand him the whole room the next time he connects.
+  assert.equal(service.peerJoinedAt(ROOM_KEY, peer.id), null)
+
+  await service.close()
+  const restarted = await new PeerChatService({ sdk: createFakeSdk(), storagePath }).start()
+  assert.equal(restarted.listRooms()[0].members.some((member) => member.username === 'Bob'), true)
+  assert.equal(restarted.peerJoinedAt(ROOM_KEY, peer.id), null)
+  await restarted.close()
+})
+
+test('PeerChat refuses a rename that collides with someone already in a room', async (t) => {
+  const storagePath = await mkdtemp(path.join(tmpdir(), 'peersky-peerchat-rename-'))
+  t.after(() => rm(storagePath, { recursive: true, force: true }))
+  const service = await new PeerChatService({ sdk: createFakeSdk(), storagePath }).start()
+  service.setProfile({ username: 'Alice', bio: 'First' })
+  await service.joinRoom({ roomKey: ROOM_KEY })
+
+  const peer = createFakePeer('cc00cc00', 'Bob')
+  service.peers.set(peer.connection, peer)
+
+  assert.throws(() => service.setProfile({ username: 'bob' }), /already taken/)
+  assert.throws(() => service.setProfile({ username: 'Bob' }), /already taken/)
+
+  // Keeping the same name while editing the rest of the profile is not a rename.
+  assert.equal(service.setProfile({ username: 'Alice', bio: 'Second' }).bio, 'Second')
+  assert.equal(service.setProfile({ username: 'Carol' }).username, 'Carol')
+
+  // An offline member counts too, the same as a connected one.
+  service.peers.delete(peer.connection)
+  service.rooms.get(ROOM_KEY).members = [{ id: 'cc00cc00', username: 'Bob', bio: '', avatar: null }]
+  assert.throws(() => service.setProfile({ username: 'Bob' }), /already taken/)
+  await service.close()
+})
+
+test('PeerChat blocking stops direct messages both ways and survives a restart', async (t) => {
+  const senderPath = await mkdtemp(path.join(tmpdir(), 'peersky-peerchat-block-sender-'))
+  const receiverPath = await mkdtemp(path.join(tmpdir(), 'peersky-peerchat-block-receiver-'))
+  t.after(() => rm(senderPath, { recursive: true, force: true }))
+  t.after(() => rm(receiverPath, { recursive: true, force: true }))
+
+  const sender = await new PeerChatService({ sdk: createFakeSdk(new Map(), 11), storagePath: senderPath }).start()
+  const receiver = await new PeerChatService({ sdk: createFakeSdk(new Map(), 12), storagePath: receiverPath }).start()
+  sender.setProfile({ username: 'Alice', bio: 'Sender' })
+  receiver.setProfile({ username: 'Bob', bio: 'Receiver' })
+
+  const inviteFrames = []
+  const senderViewOfReceiver = createFakePeer(receiver.localId, 'Bob', inviteFrames)
+  sender.peers.set(senderViewOfReceiver.connection, senderViewOfReceiver)
+  const outgoing = await sender.createDirectMessage({ peerId: receiver.localId, username: 'Bob' })
+
+  const blockedFrames = []
+  const senderPeer = createFakePeer(sender.localId, 'Alice', blockedFrames)
+  receiver.peers.set(senderPeer.connection, senderPeer)
+
+  const blocked = receiver.blockPeer({ peerId: sender.localId, username: 'Alice' })
+  assert.equal(blocked.blockedPeers.length, 1)
+  assert.equal(blocked.blockedPeers[0].username, 'Alice')
+  assert.equal(receiver.isPeerBlocked(sender.localId), true)
+
+  // The invite arrives after the block, so it never becomes a request.
+  await receiver.handlePeerMessage(senderPeer, inviteFrames.pop())
+  assert.equal(receiver.listPendingDirectMessages().length, 0)
+
+  const notice = blockedFrames.pop()
+  assert.equal(notice.type, 'dm-blocked')
+  await sender.handlePeerMessage(senderViewOfReceiver, notice)
+  assert.equal(sender.listRooms().find((room) => room.roomKey === outgoing.room.roomKey).blockedByPeer, true)
+
+  // Blocking is one way. Alice can still open the room, Bob cannot start one.
+  await assert.rejects(
+    receiver.createDirectMessage({ peerId: sender.localId, username: 'Alice' }),
+    /Unblock/
+  )
+
+  // An accepted direct room goes quiet too. Unblocked first as the control, so
+  // the assertion below cannot pass just because the room was never wired up.
+  const directRoom = await receiver.joinRoom({ roomKey: outgoing.room.roomKey })
+  Object.assign(receiver.rooms.get(directRoom.roomKey), { isDM: true, dmWith: sender.localId })
+  senderPeer.rooms.push(directRoom.roomKey)
+
+  receiver.unblockPeer({ peerId: sender.localId })
+  await receiver.handlePeerMessage(senderPeer, {
+    id: 'allowed-dm-message',
+    roomKey: directRoom.roomKey,
+    sn: 'Alice',
+    ...encryptPeerChatMessage('Before the block', directRoom.roomKey),
+    ts: Date.now()
+  })
+  assert.equal((await receiver.getSnapshot({ roomKey: directRoom.roomKey, version: -1 })).messages.length, 1)
+
+  receiver.blockPeer({ peerId: sender.localId, username: 'Alice' })
+  await receiver.handlePeerMessage(senderPeer, {
+    id: 'blocked-dm-message',
+    roomKey: directRoom.roomKey,
+    sn: 'Alice',
+    ...encryptPeerChatMessage('After the block', directRoom.roomKey),
+    ts: Date.now() + 1
+  })
+  const dmMessages = (await receiver.getSnapshot({ roomKey: directRoom.roomKey, version: -1 })).messages
+  assert.equal(dmMessages.length, 1)
+  assert.equal(dmMessages[0].message, 'Before the block')
+
+  await receiver.close()
+  const restarted = await new PeerChatService({
+    sdk: createFakeSdk(new Map(), 12),
+    storagePath: receiverPath
+  }).start()
+  assert.equal(restarted.isPeerBlocked(sender.localId), true)
+  assert.equal(restarted.listBlockedPeers()[0].username, 'Alice')
+
+  const unblocked = restarted.unblockPeer({ peerId: sender.localId })
+  assert.deepEqual(unblocked.blockedPeers, [])
+  assert.equal(restarted.isPeerBlocked(sender.localId), false)
+  assert.throws(() => restarted.unblockPeer({ peerId: sender.localId }), /not blocked/)
+  assert.throws(() => restarted.blockPeer({ peerId: restarted.localId }), /cannot block yourself/)
+
+  await sender.close()
+  await restarted.close()
 })
 
 test('PeerChat restores malformed direct-message state as a regular room', async (t) => {

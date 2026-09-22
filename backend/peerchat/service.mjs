@@ -46,10 +46,14 @@ import {
   normalizePeerChatTimestamp,
   peerChatTopicHex
 } from './protocol.mjs'
+import { RPC_APP_PEERCHAT_CHANGED } from '../rpc/commands.mjs'
+import { notifyApp } from '../rpc/notify.mjs'
 import { attachPeerChatTransport } from './transport.mjs'
 import { PRE_JOINED_PEERCHAT_ROOM_KEY } from './rooms.mjs'
 
 const MAX_ROOMS = 50
+const MAX_BLOCKED_PEERS = 500
+const PEERCHAT_NOTIFY_DEBOUNCE_MS = 40
 const MAX_RETURNED_MESSAGES = 200
 const MAX_RETURNED_ENTRIES = 1000
 const MAX_SYNC_MESSAGES = 200
@@ -81,6 +85,10 @@ export class PeerChatService {
     this.profile = { username: '', bio: '', avatar: null, linkPreview: true }
     this.rooms = new Map()
     this.pendingDirectMessages = new Map()
+    // Blocking is deliberately narrow: it stops direct messages only. A blocked
+    // person stays visible in shared rooms, the way the messengers people
+    // already know behave.
+    this.blockedPeers = new Map()
     this.moderator = createPeerChatModerator()
     this.feeds = new Map()
     this.feedListeners = new Map()
@@ -95,6 +103,7 @@ export class PeerChatService {
     this.activeRoomKey = null
     this.version = 0
     this.persistTimer = null
+    this.notifyTimer = null
     this.started = false
     this.closed = false
     this.onConnection = this.handleConnection.bind(this)
@@ -139,6 +148,10 @@ export class PeerChatService {
     if (!normalized) {
       throw new Error('Name may only contain letters, numbers, and spaces (max 50 characters).')
     }
+    const isRename = normalized.toLowerCase() !== (this.profile.username || '').toLowerCase()
+    if (isRename && this.isUsernameTaken(normalized)) {
+      throw new Error('Username is already taken. Please choose a different one.')
+    }
 
     const normalizedAvatar = avatar === undefined
       ? this.profile.avatar
@@ -170,11 +183,9 @@ export class PeerChatService {
       await this.joinRoomWithoutProfile(PRE_JOINED_PEERCHAT_ROOM_KEY)
     } catch {}
 
-    const lowerUsername = normalizedUsername.toLowerCase()
-    const usernameTaken = [...this.peers.values()].some((peer) => (
-      normalizePeerChatProfileName(peer.username).toLowerCase() === lowerUsername
-    ))
-    if (usernameTaken) throw new Error('Username is already taken. Please choose a different one.')
+    if (this.isUsernameTaken(normalizedUsername)) {
+      throw new Error('Username is already taken. Please choose a different one.')
+    }
 
     const profile = this.setProfile({ username: normalizedUsername, bio, avatar, linkPreview })
     const welcomeRoom = this.rooms.get(PRE_JOINED_PEERCHAT_ROOM_KEY)
@@ -300,6 +311,7 @@ export class PeerChatService {
     this.ensureProfile()
     const normalizedPeerId = normalizePeerChatPeerId(peerId)
     if (!normalizedPeerId || normalizedPeerId === this.localId) throw new Error('Choose another online peer.')
+    if (this.isPeerBlocked(normalizedPeerId)) throw new Error('Unblock this person before messaging them.')
     const peer = [...this.peers.values()].find((candidate) => candidate.id === normalizedPeerId)
     if (!peer) throw new Error('That peer is no longer connected.')
 
@@ -379,6 +391,71 @@ export class PeerChatService {
     return { pendingDirectMessages: this.listPendingDirectMessages(), version: this.version }
   }
 
+  // Checked against everyone we can see: connected peers and the people already
+  // recorded in our rooms.
+  isUsernameTaken (username) {
+    const wanted = normalizePeerChatProfileName(username).toLowerCase()
+    if (!wanted) return false
+
+    for (const peer of this.peers.values()) {
+      if (normalizePeerChatPeerId(peer.id) === this.localId) continue
+      if (normalizePeerChatProfileName(peer.username).toLowerCase() === wanted) return true
+    }
+    for (const room of this.rooms.values()) {
+      for (const member of room.members || []) {
+        if (member.id === this.localId) continue
+        if (normalizePeerChatProfileName(member.username).toLowerCase() === wanted) return true
+      }
+    }
+    return false
+  }
+
+  isPeerBlocked (peerId) {
+    const id = normalizePeerChatPeerId(peerId)
+    return Boolean(id) && this.blockedPeers.has(id)
+  }
+
+  listBlockedPeers () {
+    return [...this.blockedPeers.values()].sort((left, right) => right.blockedAt - left.blockedAt)
+  }
+
+  blockPeer ({ peerId, username } = {}) {
+    const id = normalizePeerChatPeerId(peerId)
+    if (!id) throw new Error('PeerChat peer not found.')
+    if (id === this.localId) throw new Error('You cannot block yourself.')
+
+    const existing = this.blockedPeers.get(id)
+    this.blockedPeers.set(id, {
+      peerId: id,
+      username: normalizePeerChatProfileName(username) || existing?.username || id,
+      blockedAt: existing?.blockedAt ?? Date.now()
+    })
+    while (this.blockedPeers.size > MAX_BLOCKED_PEERS) {
+      this.blockedPeers.delete(this.blockedPeers.keys().next().value)
+    }
+
+    // Drop any request they already had waiting.
+    for (const [key, pending] of this.pendingDirectMessages) {
+      if (pending.fromId === id) this.pendingDirectMessages.delete(key)
+    }
+
+    this.persistNow()
+    this.bumpVersion()
+    return {
+      blockedPeers: this.listBlockedPeers(),
+      pendingDirectMessages: this.listPendingDirectMessages(),
+      version: this.version
+    }
+  }
+
+  unblockPeer ({ peerId } = {}) {
+    const id = normalizePeerChatPeerId(peerId)
+    if (!id || !this.blockedPeers.delete(id)) throw new Error('PeerChat peer is not blocked.')
+    this.persistNow()
+    this.bumpVersion()
+    return { blockedPeers: this.listBlockedPeers(), version: this.version }
+  }
+
   setRoomPinned ({ roomKey, pinned } = {}) {
     const normalized = normalizePeerChatRoomKey(roomKey)
     const room = this.rooms.get(normalized)
@@ -452,12 +529,15 @@ export class PeerChatService {
     if (!this.feeds.has(normalized)) await this.joinRoomNetwork(normalized)
 
     const unchanged = Number.isSafeInteger(version) && version === this.version
+    // Read first: this is where authors are lifted out of the feed, and the
+    // room payload below has to include them.
+    const messages = unchanged ? null : await this.readMessages(normalized)
     return {
       version: this.version,
       profile: this.getProfile(),
       room: this.publicRoom(room),
       rooms: this.listRooms(),
-      messages: unchanged ? null : await this.readMessages(normalized)
+      messages
     }
   }
 
@@ -588,6 +668,8 @@ export class PeerChatService {
     this.closed = true
     if (this.persistTimer) clearTimeout(this.persistTimer)
     this.persistTimer = null
+    if (this.notifyTimer) clearTimeout(this.notifyTimer)
+    this.notifyTimer = null
 
     this.sdk.swarm.off?.('connection', this.onConnection)
     this.sdk.localSwarm?.off?.('topics-change', this.onTopicsChange)
@@ -895,6 +977,21 @@ export class PeerChatService {
       return
     }
 
+    if (message.type === 'dm-blocked') {
+      if (!this.consumeControlRate(peer)) return
+      const blockedRoomKey = normalizePeerChatRoomKey(message.roomKey)
+      const blockedRoom = this.rooms.get(blockedRoomKey)
+      if (!blockedRoom?.isDM || blockedRoom.dmWith !== peer.id) return
+      // Same shape as a rejection so the UI already knows how to show it, but
+      // flagged so we can word it as blocked rather than declined.
+      blockedRoom.pendingAcceptance = false
+      blockedRoom.rejected = true
+      blockedRoom.blockedByPeer = true
+      this.schedulePersist()
+      this.bumpVersion()
+      return
+    }
+
     if (message.type === 'dm-accept' || message.type === 'dm-reject') {
       if (!this.consumeControlRate(peer)) return
       const directRoomKey = normalizePeerChatRoomKey(message.roomKey)
@@ -918,6 +1015,11 @@ export class PeerChatService {
     const roomKey = normalizePeerChatRoomKey(message.roomKey)
     if (!roomKey || !peer.rooms.includes(roomKey) || !this.rooms.has(roomKey)) return
     if (this.moderator.isKicked(peer.id, roomKey)) return
+
+    // A block only closes direct messages. Shared rooms keep working, so this
+    // check is scoped to the one-to-one room rather than the peer.
+    const incomingRoom = this.rooms.get(roomKey)
+    if (incomingRoom.isDM && incomingRoom.dmWith === peer.id && this.isPeerBlocked(peer.id)) return
 
     if (message.type === 'request-room-meta') {
       if (!this.consumeControlRate(peer)) return
@@ -989,7 +1091,7 @@ export class PeerChatService {
       if (message.username) peer.username = normalizePeerChatProfileName(message.username) || peer.username
       if (Object.hasOwn(message, 'bio')) peer.bio = normalizePeerChatBio(message.bio)
       if (Object.hasOwn(message, 'avatar')) peer.avatar = normalizePeerChatAvatar(message.avatar)
-      if (this.rememberRoomMember(room, peer)) this.schedulePersist()
+      if (this.rememberRoomMember(room, peer, message.ts)) this.schedulePersist()
       this.sendRoomMeta(peer, roomKey)
       await this.syncHistoryToPeerOnce(peer, roomKey)
       this.bumpVersion()
@@ -1113,7 +1215,7 @@ export class PeerChatService {
       bio: this.profile.bio || '',
       avatar: this.profile.avatar || null,
       id: `${roomKey}-${this.localId}-join-${Date.now()}`,
-      ts: Date.now()
+      ts: roomJoinTime(this.rooms.get(roomKey))
     })
     this.syncHistoryToPeerOnce(peer, roomKey).catch(() => {})
   }
@@ -1185,6 +1287,16 @@ export class PeerChatService {
   }
 
   receiveDirectMessageInvite (peer, message) {
+    if (this.isPeerBlocked(peer.id)) {
+      // Tell them rather than dropping it silently. They keep seeing us in
+      // shared rooms; only direct messages are closed.
+      this.sendToPeer(peer, {
+        type: 'dm-blocked',
+        roomKey: normalizePeerChatRoomKey(message.roomKey),
+        dmWith: this.localId
+      })
+      return
+    }
     const roomKey = normalizePeerChatRoomKey(message.roomKey)
     const toId = normalizePeerChatPeerId(message.toId)
     let expectedRoomKey
@@ -1253,12 +1365,19 @@ export class PeerChatService {
     const feed = this.feeds.get(roomKey)
     if (!feed || peer.connection.destroyed) return false
 
+    // Send only what this peer missed. Someone who just joined starts with an
+    // empty room rather than inheriting a stranger's backlog, while a member
+    // coming back still gets everything since they were last here. Until they
+    // tell us when they joined, send nothing.
+    const since = this.peerJoinedAt(roomKey, peer.id)
+
     const firstIndex = Math.max(0, feed.length - MAX_SYNC_MESSAGES)
-    for (let index = firstIndex; index < feed.length; index += 1) {
+    for (let index = since === null ? feed.length : firstIndex; index < feed.length; index += 1) {
       if (peer.connection.destroyed || !peer.rooms.includes(roomKey)) return false
       try {
         const entry = await feed.get(index)
         if (!entry?.ct && entry?.type !== 'reaction') continue
+        if (Number.isFinite(entry?.ts) && entry.ts < since) continue
         const type = entry.type === 'reaction' ? 'sync-reaction' : 'sync'
         const sent = this.sendToPeer(peer, { ...entry, type, roomKey })
         if (!sent && !await waitForConnectionDrain(peer.connection)) return false
@@ -1398,10 +1517,12 @@ export class PeerChatService {
 
     const messages = []
     const reactions = new Map()
+    const authors = new Map()
     const firstIndex = Math.max(0, feed.length - MAX_RETURNED_ENTRIES)
     for (let index = firstIndex; index < feed.length; index += 1) {
       try {
         const entry = await feed.get(index)
+        this.collectEntryAuthor(authors, entry)
         if (entry?.type === 'reaction') {
           this.collectReaction(reactions, entry)
           continue
@@ -1414,6 +1535,7 @@ export class PeerChatService {
         messages.push(this.entryToMessage(entry, roomKey))
       } catch {}
     }
+    this.rememberFeedAuthors(roomKey, authors)
     return messages
       .slice(-MAX_RETURNED_MESSAGES)
       .map((message) => ({
@@ -1421,6 +1543,35 @@ export class PeerChatService {
         reactions: this.summarizeReactions(reactions.get(message.id))
       }))
       .sort((left, right) => left.timestamp - right.timestamp)
+  }
+
+  collectEntryAuthor (authors, entry) {
+    const id = normalizePeerChatPeerId(entry?.sender)
+    const username = normalizePeerChatProfileName(entry?.sn)
+    if (!id || !username || id === this.localId || authors.has(id)) return
+    authors.set(id, username)
+  }
+
+  // Desktop lists everyone who has ever spoken in the room, not just the peers
+  // that happen to be connected. The feed is the only record of the rest, so
+  // their names are lifted out of it and kept with the room.
+  rememberFeedAuthors (roomKey, authors) {
+    const room = this.rooms.get(roomKey)
+    if (!room || authors.size === 0) return
+
+    const members = Array.isArray(room.members) ? room.members : []
+    let changed = false
+    for (const [id, username] of authors) {
+      if (members.some((member) => member.id === id)) continue
+      if (members.length >= MAX_RETURNED_ROOM_MEMBERS - 1) break
+      // No joinedAt on purpose: that belongs to an announced join and drives
+      // which history a peer is sent.
+      members.push({ id, username, bio: '', avatar: null })
+      changed = true
+    }
+    if (!changed) return
+    room.members = members
+    this.schedulePersist()
   }
 
   collectReaction (reactions, suppliedEntry) {
@@ -1507,6 +1658,7 @@ export class PeerChatService {
       createdBy: normalizePeerChatPeerId(room.createdBy),
       createdByName: normalizePeerChatProfileName(room.createdByName),
       moderation: normalizePeerChatModeration(room.moderation),
+      blockedByPeer: room.blockedByPeer === true,
       lastMessage: room.lastMessage || null,
       unreadCount: room.unreadCount || 0,
       unreadMentions: room.unreadMentions || 0,
@@ -1578,10 +1730,20 @@ export class PeerChatService {
       })
       if (members.size >= MAX_RETURNED_ROOM_MEMBERS) break
     }
-    return [...members.values()]
+    return [...members.values()].sort((left, right) => {
+      if (left.self !== right.self) return left.self ? -1 : 1
+      if (left.online !== right.online) return left.online ? -1 : 1
+      return left.username.localeCompare(right.username)
+    })
   }
 
-  rememberRoomMember (room, peer) {
+  peerJoinedAt (roomKey, peerId) {
+    const id = normalizePeerChatPeerId(peerId)
+    const member = this.rooms.get(roomKey)?.members?.find((entry) => entry.id === id)
+    return Number.isFinite(member?.joinedAt) ? member.joinedAt : null
+  }
+
+  rememberRoomMember (room, peer, announcedJoinedAt) {
     const id = normalizePeerChatPeerId(peer?.id)
     const username = normalizePeerChatProfileName(peer?.username)
     if (!room || !id || id === this.localId || !username) return false
@@ -1594,7 +1756,7 @@ export class PeerChatService {
       username,
       bio: normalizePeerChatBio(peer.bio),
       avatar: normalizePeerChatAvatar(peer.avatar),
-      joinedAt: existing?.joinedAt || Date.now()
+      joinedAt: existing?.joinedAt ?? announcedJoinTs(announcedJoinedAt)
     }
     if (existing && JSON.stringify(existing) === JSON.stringify(member)) return false
     if (!existing && members.length >= MAX_RETURNED_ROOM_MEMBERS - 1) return false
@@ -1616,6 +1778,21 @@ export class PeerChatService {
 
   bumpVersion () {
     this.version = this.version >= Number.MAX_SAFE_INTEGER ? 1 : this.version + 1
+    // Tell the app straight away rather than letting it find out on its next
+    // poll. Everything funnels through here, so a new message, a reaction and
+    // a join all arrive immediately.
+    this.notifyVersionChanged()
+  }
+
+  notifyVersionChanged () {
+    if (this.notifyTimer) return
+    // Coalesce a burst, such as a history sync landing many entries at once,
+    // into one wake-up rather than one per entry.
+    this.notifyTimer = setTimeout(() => {
+      this.notifyTimer = null
+      notifyApp(RPC_APP_PEERCHAT_CHANGED, { version: this.version })
+    }, PEERCHAT_NOTIFY_DEBOUNCE_MS)
+    if (typeof this.notifyTimer?.unref === 'function') this.notifyTimer.unref()
   }
 
   loadState () {
@@ -1630,6 +1807,16 @@ export class PeerChatService {
           avatar: normalizePeerChatAvatar(parsed?.profile?.avatar),
           linkPreview: parsed?.profile?.linkPreview !== false
         }
+      }
+
+      for (const value of Array.isArray(parsed?.blockedPeers) ? parsed.blockedPeers.slice(0, MAX_BLOCKED_PEERS) : []) {
+        const peerId = normalizePeerChatPeerId(value?.peerId)
+        if (!peerId || peerId === this.localId) continue
+        this.blockedPeers.set(peerId, {
+          peerId,
+          username: normalizePeerChatProfileName(value?.username) || peerId,
+          blockedAt: normalizePeerChatTimestamp(value?.blockedAt)
+        })
       }
 
       const rooms = Array.isArray(parsed?.rooms) ? parsed.rooms.slice(0, MAX_ROOMS) : []
@@ -1706,7 +1893,8 @@ export class PeerChatService {
         version: 1,
         profile: this.profile,
         rooms: [...this.rooms.values()],
-        pendingDirectMessages: this.listPendingDirectMessages()
+        pendingDirectMessages: this.listPendingDirectMessages(),
+        blockedPeers: this.listBlockedPeers()
       }), { mode: 0o600 })
       renameSync(temporaryPath, this.stateFilePath)
     } catch (error) {
@@ -1732,6 +1920,18 @@ export class PeerChatService {
     this.feeds.delete(roomKey)
     if (feed?.close) await feed.close().catch(() => {})
   }
+}
+
+function roomJoinTime (room) {
+  const joined = room?.joinedAt ?? room?.createdAt
+  return Number.isFinite(joined) ? joined : Date.now()
+}
+
+// A peer can claim anything. A time in the future would hide every message, so
+// clamp it to now; anything unusable falls back to now as well.
+function announcedJoinTs (ts) {
+  const now = Date.now()
+  return Number.isFinite(ts) && ts > 0 && ts <= now ? ts : now
 }
 
 function normalizeUnreadCount (value) {
@@ -1764,12 +1964,15 @@ function normalizePersistedRoomMembers (value, localId) {
     const username = normalizePeerChatProfileName(candidate?.username)
     if (!id || id === localId || !username || seen.has(id)) continue
     seen.add(id)
+    // joinedAt stays absent unless the peer announced one. Storing a zero here
+    // would read as "joined at the epoch" and replay the whole room to them.
+    const joinedAt = normalizePeerChatReadTimestamp(candidate?.joinedAt)
     members.push({
       id,
       username,
       bio: normalizePeerChatBio(candidate?.bio),
       avatar: normalizePeerChatAvatar(candidate?.avatar),
-      joinedAt: normalizePeerChatReadTimestamp(candidate?.joinedAt)
+      ...(joinedAt > 0 && { joinedAt })
     })
   }
   return members
