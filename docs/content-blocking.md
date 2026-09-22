@@ -34,7 +34,7 @@ npm run android
 
 The setup script accepts Cargo from `CARGO`, the standard Cargo home directory, or the system `PATH`. Android parses one shared native ruleset and reuses it across all WebViews. Filtering runs from WebView's request interception callback without a React Native bridge round trip for each request.
 
-The repository pins Rust 1.85.1 and the required Android targets in `rust-toolchain.toml`. EAS Android builds invoke the same setup through `eas-build-pre-install`; non-Android EAS builds skip it.
+The repository pins Rust 1.88.0 and the required Android targets in `rust-toolchain.toml`. EAS Android builds invoke the same setup through `eas-build-pre-install`; non-Android EAS builds skip it. EAS build images ship the NDK but not Rust, so on EAS the setup script first installs a pinned `rustup-init` (version and SHA-256 checked in the script) into the builder's home directory, then installs the pinned toolchain before adding the Android targets.
 
 ## iOS setup
 

@@ -14,14 +14,25 @@ describe('browser HTML helpers', () => {
       headers: { 'content-type': 'text/html' }
     }, 'hyper://site/')
 
-    assert.match(rendered, /<head><meta name="viewport"/)
+    // The base tag goes first so relative URLs resolve against it, and it is
+    // what keeps hyper:// pages rendering on iOS, where WKWebView refuses a
+    // baseUrl with an unknown scheme.
+    assert.match(rendered, /<head><base href="hyper:\/\/site\/" \/><meta name="viewport"/)
     assert.match(rendered, /<body>Page<\/body>/)
 
     const withViewport = '<meta name="viewport" content="width=device-width"><p>Page</p>'
-    assert.equal(createHyperBrowserHtml({
+    const renderedWithViewport = createHyperBrowserHtml({
       body: withViewport,
       headers: { 'content-type': 'text/html' }
-    }, 'hyper://site/'), withViewport)
+    }, 'hyper://site/')
+    assert.equal(renderedWithViewport, `<base href="hyper://site/" />\n${withViewport}`)
+
+    // An existing base tag is left alone rather than being doubled up.
+    const withBase = '<html><head><base href="hyper://other/"><meta name="viewport" content="x"></head></html>'
+    assert.equal(createHyperBrowserHtml({
+      body: withBase,
+      headers: { 'content-type': 'text/html' }
+    }, 'hyper://site/'), withBase)
   })
 
   test('renders escaped Hyper directory entries with child URLs', () => {

@@ -94,6 +94,7 @@ import {
   type RuntimeTab,
   canUseP2pAppPageActions,
   getRuntimeAppFromUrl,
+  getRuntimeAppLaunchSuffix,
   getRuntimeAppIconSource,
   getRuntimeAppTitle,
   getRuntimeAppUrl
@@ -133,6 +134,7 @@ import { HyperdriveScreen } from './hyperdrive/HyperdriveScreen'
 import { canUseNetworkForOfflineHyper } from './hyperdrive/offline-network.mjs'
 import { PeerChatScreen, type PeerChatResponse } from './peerchat/PeerChatScreen'
 import { usePeerChatNotifications } from './peerchat/usePeerChatNotifications'
+import { PeerTunesScreen } from './peertunes/PeerTunesScreen'
 import { peerSkyWebViewNativeConfig } from './downloads/PeerSkyWebView'
 import {
   initializeContentBlocking,
@@ -174,7 +176,8 @@ import {
   RPC_P2PMD_PREVIEW,
   RPC_P2PMD_ROOM_JOIN,
   RPC_P2PMD_ROOM_PUBLISH,
-  RPC_P2PMD_ROOM_STATUS
+  RPC_P2PMD_ROOM_STATUS,
+  RPC_PEERTUNES_START
 } from '../backend/rpc/commands.mjs'
 
 type P2pmdRoom = {
@@ -188,6 +191,8 @@ type P2pmdRoom = {
 }
 
 type P2pmdViewMode = 'edit' | 'preview' | 'slides'
+
+const PEERTUNES_START_TIMEOUT_MS = 15000
 
 const HYPER_OFFLINE_NETWORK_COMMANDS = new Set([
   RPC_HYPER_INIT,
@@ -391,6 +396,10 @@ export default function App () {
   const [hsConnectPort, setHsConnectPort] = useState('8989')
   const [hsConnectHost, setHsConnectHost] = useState('127.0.0.1')
   const [p2pmdUrl, setP2pmdUrl] = useState<string | null>(null)
+  const [peertunesUrl, setPeertunesUrl] = useState<string | null>(null)
+  const [peertunesLaunchSuffix, setPeertunesLaunchSuffix] = useState('')
+  const [peertunesError, setPeertunesError] = useState<string | null>(null)
+  const [peertunesMounted, setPeertunesMounted] = useState(false)
   const [p2pmdRoom, setP2pmdRoom] = useState<P2pmdRoom | null>(null)
   const [p2pmdEditorHtml, setP2pmdEditorHtml] = useState<string | null>(null)
   const [p2pmdJoinKey, setP2pmdJoinKey] = useState('')
@@ -577,10 +586,14 @@ export default function App () {
     let active = true
 
     function queueIncomingUrl (url: string | null) {
+      // peersky:// is our own scheme and is registered for deep links, so a
+      // shared link like peersky://p2p/peertunes/#playlist=... arrives here.
+      // Only accept the ones that name a built-in app, not any peersky:// text.
+      const isInternalAppUrl = Boolean(url) && getRuntimeAppFromUrl(url as string) !== null
       if (
         !active ||
         !url ||
-        (!isWebUrl(url) && !isHyperUrl(url)) ||
+        (!isWebUrl(url) && !isHyperUrl(url) && !isInternalAppUrl) ||
         url.length > MAX_BROWSER_URL_LENGTH
       ) return
 
@@ -631,7 +644,12 @@ export default function App () {
 
   useEffect(() => {
     if (!pendingRestoredUrl) return
-    if (isHyperUrl(pendingRestoredUrl) && (isBooting || !rpcRef.current)) return
+    // Built-in apps talk to the Bare worklet as soon as they open, so they have
+    // to wait for it exactly like hyper:// does. Without this a restored
+    // PeerTunes tab hit "Worklet is not ready" on every cold start.
+    const needsWorklet = isHyperUrl(pendingRestoredUrl) ||
+      getRuntimeAppFromUrl(pendingRestoredUrl) !== null
+    if (needsWorklet && (isBooting || !rpcRef.current)) return
 
     const restoredUrl = pendingRestoredUrl
     setPendingRestoredUrl(null)
@@ -905,7 +923,7 @@ export default function App () {
 
     const internalApp = getRuntimeAppFromUrl(nextUrl)
     if (internalApp) {
-      openInternalApp(internalApp)
+      openInternalApp(internalApp, true, getRuntimeAppLaunchSuffix(nextUrl))
       return
     }
 
@@ -944,7 +962,7 @@ export default function App () {
     }
 
     if (internalApp) {
-      openInternalApp(internalApp, false)
+      openInternalApp(internalApp, false, getRuntimeAppLaunchSuffix(url))
       return
     }
 
@@ -1062,8 +1080,8 @@ export default function App () {
     setStatus('Browser home')
   }
 
-  function openInternalApp (app: RuntimeTab, shouldCommit = true) {
-    const appUrl = getRuntimeAppUrl(app)
+  function openInternalApp (app: RuntimeTab, shouldCommit = true, launchSuffix = '') {
+    const appUrl = `${getRuntimeAppUrl(app)}${launchSuffix}`
     cancelPendingBrowserLoad()
     setActiveTab(app)
     setBrowserTitle(getRuntimeAppTitle(app))
@@ -1073,6 +1091,50 @@ export default function App () {
       commitBrowserEntry(appUrl, { kind: 'app', app })
     } else {
       replaceBrowserEntry(appUrl, { kind: 'app', app })
+    }
+
+    if (app === 'peertunes') {
+      setPeertunesMounted(true)
+      setPeertunesLaunchSuffix(launchSuffix)
+      void ensurePeerTunesServer()
+    }
+  }
+
+  async function ensurePeerTunesServer () {
+    setPeertunesError(null)
+
+    try {
+      // Starting the loopback server is quick. callRpc itself never times out,
+      // which is right for a long hyper read but means a wedged worklet would
+      // leave this screen spinning with no way back, so bound this one call.
+      const response = await Promise.race([
+        callRpc(RPC_PEERTUNES_START, {}),
+        new Promise<never>((_resolve, reject) => {
+          setTimeout(
+            () => reject(new Error('PeerTunes took too long to start. Try again.')),
+            PEERTUNES_START_TIMEOUT_MS
+          )
+        })
+      ])
+
+      if (!response.ok || !response.localUrl) {
+        const message = response.error || 'Failed starting PeerTunes'
+        setPeertunesError(message)
+        setStatus(message)
+        return
+      }
+
+      setPeertunesUrl(response.localUrl)
+
+      // The library lives in this origin's IndexedDB, so a different port means
+      // an empty library. Say so rather than letting the music look lost.
+      if (response.usingFallbackPort) {
+        setStatus('PeerTunes started on a temporary port, so your saved library is not available')
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      setPeertunesError(message)
+      setStatus(message)
     }
   }
 
@@ -1231,6 +1293,10 @@ export default function App () {
 
     if (entry.source.kind === 'app') {
       setActiveTab(entry.source.app)
+      if (entry.source.app === 'peertunes') {
+        setPeertunesMounted(true)
+        setPeertunesLaunchSuffix(getRuntimeAppLaunchSuffix(entry.url))
+      }
     } else {
       setActiveTab('hyper')
     }
@@ -2819,7 +2885,11 @@ export default function App () {
                   soundsEnabled={peerChatNotifications.soundsEnabled}
                 />
                 )
-              : (
+              : activeTab === 'peertunes'
+                // PeerTunes lives in the persistent layer below so music keeps
+                // playing when the user switches tabs. Nothing to draw here.
+                ? null
+                : (
               <ScrollView
                 style={[
                   styles.browserContentPage,
@@ -3102,6 +3172,28 @@ export default function App () {
               )
             : null}
 
+        {peertunesMounted && (
+          <View
+            pointerEvents={activeTab === 'peertunes' && browserSource.kind === 'app' ? 'auto' : 'none'}
+            style={[
+              styles.browserWebViewLayer,
+              activeTab === 'peertunes' && browserSource.kind === 'app'
+                ? null
+                : styles.browserWebViewLayerHidden
+            ]}
+          >
+            <PeerTunesScreen
+              error={peertunesError}
+              isDark={browserIsDark}
+              launchSuffix={peertunesLaunchSuffix}
+              localUrl={peertunesUrl}
+              onEnsureServer={() => void ensurePeerTunesServer()}
+              onOpenUrl={(targetUrl) => void loadBrowserUrl(targetUrl)}
+              onStatus={setStatus}
+            />
+          </View>
+        )}
+
         {browserTabsState.tabs.map((tab) => {
           if (!contentBlockingReady) return null
           const entry = tab.history[tab.historyIndex]
@@ -3189,7 +3281,12 @@ export default function App () {
                 ? { uri: entry.source.uri }
                 : {
                     html: entry.source.html,
-                    baseUrl: entry.source.kind === 'hyper' ? entry.source.baseUrl : undefined
+                    // iOS refuses to render HTML whose baseUrl uses an unknown
+                    // scheme, so hyper:// pages came up blank there. The base is
+                    // carried by a <base href> tag in the document instead.
+                    baseUrl: entry.source.kind === 'hyper' && Platform.OS !== 'ios'
+                      ? entry.source.baseUrl
+                      : undefined
                   }}
               allowsFullscreenVideo={true}
               cacheEnabled={true}

@@ -212,7 +212,7 @@ async function getHyperFetch (runtime) {
   return fetch
 }
 
-function routedHyperFetch (url, options) {
+export function routedHyperFetch (url, options) {
   return withHyperRuntimeForAddress(url, async (runtime) => {
     await prepareHyperRead(runtime, url)
     const fetch = await getHyperFetch(runtime)
@@ -220,7 +220,7 @@ function routedHyperFetch (url, options) {
   })
 }
 
-function routedHyperRangeFetch (url, rangeHeader) {
+export function routedHyperRangeFetch (url, rangeHeader) {
   const target = parseHyperUrl(url)
   if (target.error) throw new Error(target.error)
 
@@ -307,7 +307,7 @@ async function prepareHyperRead (runtime, address) {
   configureHyperReadTimeout(drive)
 }
 
-function ensureFetchGlobals () {
+export function ensureFetchGlobals () {
   if (typeof globalThis.Headers !== 'function') {
     globalThis.Headers = BareHeaders
   }

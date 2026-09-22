@@ -89,9 +89,9 @@ than by persisting remote HTML.
 React Native runtime views. Internal apps share the browser tab and navigation
 model but do not load arbitrary remote HTML as an app screen.
 
-The current internal routes include P2PMD, Hyperdrive, and Holesail diagnostics.
-Protocol details are documented separately in [P2PMD](p2pmd.md),
-[Hyper](hyper.md), and [Holesail](holesail.md).
+The current internal routes include P2PMD, Hyperdrive, PeerTunes, and Holesail
+diagnostics. Protocol details are documented separately in [P2PMD](p2pmd.md),
+[PeerTunes](peertunes.md), [Hyper](hyper.md), and [Holesail](holesail.md).
 
 ## Settings and privacy
 

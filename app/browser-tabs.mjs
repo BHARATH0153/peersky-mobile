@@ -5,6 +5,7 @@ import {
   MAX_BROWSER_HISTORY_ENTRIES,
   MAX_BROWSER_URL_LENGTH
 } from './browser-shell.mjs'
+import { getRuntimeAppFromUrl } from './internal-apps-registry.mjs'
 
 export const MAX_BROWSER_TABS = 50
 export const MAX_LIVE_BROWSER_WEBVIEWS = 5
@@ -13,13 +14,6 @@ export const BROWSER_PAGE_ZOOMS = [80, 90, 100, 110, 125, 150]
 export const DEFAULT_BROWSER_PAGE_ZOOM = 100
 export const DEFAULT_BROWSER_TAB_VIEW_MODE = 'grid'
 const SESSION_VERSION = 1
-const INTERNAL_APP_URLS = {
-  hyper: 'peersky://p2p/hyperdrive/',
-  holesail: 'peersky://holesail/',
-  p2pmd: 'peersky://p2p/p2pmd/',
-  peerchat: 'peersky://p2p/peerchat/'
-}
-
 export function createBrowserTab (id, title = 'New tab') {
   return {
     id,
@@ -252,7 +246,10 @@ function restorePersistedSource (source, url) {
 
   if (source.kind === 'home' && url === BROWSER_HOME_URL) return { kind: 'home' }
 
-  if (source.kind === 'app' && INTERNAL_APP_URLS[source.app] === url) {
+  // Ask the registry rather than keeping a second copy of the app list here.
+  // The old map had to be updated by hand for every new app, and compared exact
+  // strings, so a shared link carrying a #playlist suffix never matched.
+  if (source.kind === 'app' && getRuntimeAppFromUrl(url) === source.app) {
     return { kind: 'app', app: source.app }
   }
 

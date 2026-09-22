@@ -7,7 +7,7 @@ export function createHyperBrowserHtml (response, targetUrl) {
   }
 
   if (contentType.includes('text/html') || looksLikeHtml(body)) {
-    return ensureMobileViewport(body)
+    return ensureBaseHref(ensureMobileViewport(body), targetUrl)
   }
 
   return createBrowserDocumentHtml(targetUrl, `<pre>${escapeHtml(body)}</pre>`)
@@ -99,6 +99,23 @@ function createBrowserDocumentHtml (title, body) {
 </style>
 ${body}
 `
+}
+
+// WKWebView will not render HTML loaded with a baseUrl whose scheme it does not
+// know, so hyper:// pages came up blank on iOS while Android was happy. Carry
+// the base in the document instead, which both engines honour for resolving
+// relative links and which keeps hyper:// URLs intact for the navigation
+// interceptor.
+function ensureBaseHref (html, targetUrl) {
+  if (!targetUrl || /<base\s[^>]*href=/i.test(html)) return html
+
+  const base = `<base href="${escapeHtmlAttribute(targetUrl)}" />`
+
+  if (/<head\b[^>]*>/i.test(html)) {
+    return html.replace(/<head\b([^>]*)>/i, `<head$1>${base}`)
+  }
+
+  return `${base}\n${html}`
 }
 
 function ensureMobileViewport (html) {

@@ -16,7 +16,7 @@ import {
   type ViewStyle,
   View
 } from 'react-native'
-import { SafeAreaView } from 'react-native-safe-area-context'
+import { SafeAreaProvider, SafeAreaView, initialWindowMetrics } from 'react-native-safe-area-context'
 import type { BrowserTabPreview } from './useBrowserTabPreviews'
 import { styles } from '../styles'
 import FireIcon from '../../assets/icons/bootstrap/fire.svg'
@@ -111,10 +111,15 @@ export function BrowserTabsScreen ({
       visible={visible}
       onRequestClose={onClose}
     >
-      <SafeAreaView
-        style={[styles.browserTabsScreen, { backgroundColor: palette.shell }]}
-        edges={['top', 'left', 'right', 'bottom']}
-      >
+      {/* A react-native Modal is its own root view, so the insets from the app's
+          SafeAreaProvider do not reach inside it and the header rendered under
+          the status bar and Dynamic Island. Provide them again here, seeded
+          with the window metrics so the very first frame is already correct. */}
+      <SafeAreaProvider initialMetrics={initialWindowMetrics}>
+        <SafeAreaView
+          style={[styles.browserTabsScreen, { backgroundColor: palette.shell }]}
+          edges={['top', 'left', 'right', 'bottom']}
+        >
         <View style={[styles.browserTabsHeader, { borderBottomColor: palette.border }]}>
           <View>
             <Text style={[styles.browserTabsTitle, { color: palette.text }]}>Tabs</Text>
@@ -271,7 +276,8 @@ export function BrowserTabsScreen ({
             </SwipeableTabCard>
           )}
         />
-      </SafeAreaView>
+        </SafeAreaView>
+      </SafeAreaProvider>
     </Modal>
   )
 }

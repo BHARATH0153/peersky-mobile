@@ -322,6 +322,7 @@ describe('internal app route registry', () => {
       'peersky://p2p/hyperdrive/',
       'peersky://p2p/p2pmd/',
       'peersky://p2p/peerchat/',
+      'peersky://p2p/peertunes/',
       'peersky://holesail/'
     ])
 
@@ -329,6 +330,7 @@ describe('internal app route registry', () => {
     assert.equal(getRuntimeAppUrl('peerchat'), 'peersky://p2p/peerchat/')
     assert.equal(getRuntimeAppUrl('holesail'), 'peersky://holesail/')
     assert.equal(getRuntimeAppUrl('hyper'), 'peersky://p2p/hyperdrive/')
+    assert.equal(getRuntimeAppUrl('peertunes'), 'peersky://p2p/peertunes/')
     assert.equal(getRuntimeAppUrl('unknown'), 'peersky://p2p/p2pmd/')
   })
 
@@ -348,6 +350,7 @@ describe('internal app route registry', () => {
     assert.equal(getRuntimeAppTitle('peerchat'), 'PeerChat')
     assert.equal(getRuntimeAppTitle('holesail'), 'Holesail')
     assert.equal(getRuntimeAppTitle('hyper'), 'Hyperdrive')
+    assert.equal(getRuntimeAppTitle('peertunes'), 'PeerTunes')
   })
 
   test('enables page actions only for registered p2p app routes', () => {
@@ -357,5 +360,25 @@ describe('internal app route registry', () => {
     assert.equal(canUseP2pAppPageActions('holesail', 'peersky://holesail/'), false)
     assert.equal(canUseP2pAppPageActions('p2pmd', 'peersky://p2p/peerchat/'), false)
     assert.equal(canUseP2pAppPageActions('p2pmd', 'peersky://settings/'), false)
+  })
+})
+
+test('keeps subframe web requests inside a Hyper page instead of navigating', () => {
+  // An embed on a hyper site used to replace the page the user was reading.
+  assert.deepEqual(getBrowserRequestAction({
+    requestUrl: 'https://pixelfed.social/akhileshthite/embed',
+    currentSourceKind: 'hyper',
+    isTopFrame: false
+  }), { action: 'allow' })
+
+  // A real click still takes the tab to the web.
+  assert.deepEqual(getBrowserRequestAction({
+    requestUrl: 'https://example.com/',
+    currentSourceKind: 'hyper',
+    isTopFrame: true
+  }), {
+    action: 'commit-web',
+    url: 'https://example.com/',
+    source: { kind: 'web', uri: 'https://example.com/' }
   })
 })

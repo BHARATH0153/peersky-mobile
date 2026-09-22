@@ -1,0 +1,76 @@
+// The app page lives on the loopback PeerTunes server. A share link's
+// query or fragment rides along so the page can pick up the playlist.
+export function createPeerTunesPageUrl (localUrl, launchSuffix = '') {
+  const base = String(localUrl || '').replace(/\/+$/, '')
+  if (!base) return ''
+  return `${base}/${launchSuffix || ''}`
+}
+
+// Only the app's own origin may navigate inside the WebView. Anything else,
+// such as the GitHub link in the About screen, goes back to the browser.
+export function isPeerTunesPageRequest (requestUrl, localUrl) {
+  const value = String(requestUrl || '')
+  if (value === 'about:blank') return true
+
+  const base = String(localUrl || '').replace(/\/+$/, '')
+  if (!base) return false
+
+  // Compare parsed origins rather than string prefixes. A prefix test rejects
+  // same-origin URLs that carry only a query or a fragment, which ejected the
+  // user out of the app, and it is fussy about scheme case.
+  try {
+    const target = new URL(value)
+    const expected = new URL(base)
+    return target.protocol === expected.protocol &&
+      target.hostname === expected.hostname &&
+      target.port === expected.port
+  } catch {
+    return false
+  }
+}
+
+// PeerTunes asks native to scan, because WKWebView has no BarcodeDetector and
+// the native scanner is the one the rest of the app already uses. The page sees
+// a promise; native runs the camera and resolves it.
+export const PEERTUNES_SCAN_BRIDGE_SCRIPT = `(function () {
+  var pending = {};
+  window.__peerskyResolveScan = function (id, value) {
+    var resolve = pending[id];
+    if (!resolve) return;
+    delete pending[id];
+    resolve(typeof value === 'string' && value ? value : null);
+  };
+  window.peerskyScanQr = function () {
+    return new Promise(function (resolve) {
+      if (!window.ReactNativeWebView) return resolve(null);
+      var id = 'scan-' + Date.now() + '-' + Math.random().toString(36).slice(2);
+      pending[id] = resolve;
+      window.ReactNativeWebView.postMessage(JSON.stringify({
+        type: 'peertunes-scan-qr',
+        requestId: id
+      }));
+    });
+  };
+})(); true;`
+
+export function parsePeerTunesScanRequest (raw) {
+  try {
+    const parsed = JSON.parse(String(raw || ''))
+    if (parsed?.type !== 'peertunes-scan-qr') return null
+    const requestId = parsed.requestId
+    return typeof requestId === 'string' && /^scan-[\w-]{1,64}$/.test(requestId)
+      ? requestId
+      : null
+  } catch {
+    return null
+  }
+}
+
+// Scanned text is whatever was on the QR code, so it goes back into the page as
+// a JSON literal. The two line separators are valid JSON but break a JavaScript
+// string, so escape them too.
+export function serializeScanResult (value) {
+  return JSON.stringify(value ?? null)
+    .replace(/\u2028/g, '\\u2028')
+    .replace(/\u2029/g, '\\u2029')
+}

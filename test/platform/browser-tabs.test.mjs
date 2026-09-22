@@ -111,6 +111,40 @@ describe('browser tab state helpers', () => {
     assert.equal(restored.tabs[0].history[2].url, 'https://peersky.p2plabs.xyz/#downloads')
   })
 
+  test('restores every built-in app tab, suffix and all', () => {
+    // The old hardcoded URL map went stale whenever an app was added, and
+    // compared exact strings, so a shared link carrying a #playlist suffix
+    // dropped to the restore spinner instead of opening the app.
+    const cases = [
+      ['peersky://p2p/peertunes/', 'peertunes'],
+      ['peersky://p2p/peertunes/#playlist=hyper%3A%2F%2Fabc%2Fmusic%2F', 'peertunes'],
+      ['peersky://p2p/peerchat/', 'peerchat'],
+      ['peersky://p2p/hyperdrive/', 'hyper'],
+      ['peersky://p2p/p2pmd/', 'p2pmd'],
+      ['peersky://holesail/', 'holesail']
+    ]
+
+    for (const [url, app] of cases) {
+      const restored = restoreBrowserTabsState(JSON.stringify({
+        version: 1,
+        activeTabId: 'tab-1',
+        viewMode: 'grid',
+        tabs: [{
+          id: 'tab-1',
+          title: app,
+          historyIndex: 0,
+          history: [{ url, source: { kind: 'app', app } }]
+        }]
+      }))
+
+      assert.deepEqual(
+        restored.tabs[0].history[0].source,
+        { kind: 'app', app },
+        `${url} should restore straight into ${app}`
+      )
+    }
+  })
+
   test('falls back safely when persisted state is malformed', () => {
     const restored = restoreBrowserTabsState('{not-json')
 

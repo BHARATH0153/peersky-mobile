@@ -49,7 +49,8 @@ import {
   RPC_PEERCHAT_DM_REJECT,
   RPC_PEERCHAT_ONBOARD,
   RPC_PEERCHAT_ATTACHMENT_UPLOAD,
-  RPC_PEERCHAT_ATTACHMENT_OPEN
+  RPC_PEERCHAT_ATTACHMENT_OPEN,
+  RPC_PEERTUNES_START
 } from './commands.mjs'
 import {
   getDefaultIdentityStoragePath,
@@ -109,6 +110,7 @@ import {
 } from '../p2pmd/preview.mjs'
 import { getP2pmdEditorPage } from '../p2pmd/server.mjs'
 import { hasIeeeMarker } from '../p2pmd/templates.mjs'
+import { startPeerTunesServer } from '../peertunes/server.mjs'
 import { parseJsonMessage, replyJson } from './messages.mjs'
 import { closePeerChatService, getPeerChatService } from '../peerchat/runtime.mjs'
 import { openPeerChatAttachment, uploadPeerChatAttachment } from '../peerchat/attachments.mjs'
@@ -607,6 +609,11 @@ export async function routeRpcRequest (req) {
         ok: true,
         ...peerChat.rejectDirectMessage(parseJsonMessage(req.data))
       })
+      return
+    }
+
+    if (req.command === RPC_PEERTUNES_START) {
+      replyJson(req, await startPeerTunesServer())
       return
     }
 
