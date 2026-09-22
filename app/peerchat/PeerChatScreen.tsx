@@ -799,9 +799,16 @@ export function PeerChatScreen ({
     if (Platform.OS !== 'android') return
     if (await isPeerChatBatteryUnrestricted()) return
 
+    // Samsung layers its own sleeping-apps list on top of Android's, in a
+    // different place, so that sentence only earns its space on a Samsung.
+    const isSamsung = /samsung/i.test(Platform.constants?.Manufacturer || '')
+    const samsungHint = isSamsung
+      ? '\n\nOn this phone also open Battery, Background usage limits, and take PeerSky out of Sleeping apps.'
+      : ''
+
     Alert.alert(
       'Keep PeerChat reachable',
-      'Android puts apps it thinks are unused to sleep, which takes you offline for everyone. Allowing PeerSky to run without restrictions keeps messages arriving.\n\nOn Samsung also check Battery, Background usage limits, and remove PeerSky from Sleeping apps.',
+      `Android puts apps it thinks are unused to sleep, which takes you offline for everyone. Setting PeerSky to unrestricted keeps messages arriving.${samsungHint}`,
       [
         { text: 'Not now', style: 'cancel' },
         {

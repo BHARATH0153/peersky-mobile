@@ -141,7 +141,9 @@ test('PeerChat offers the Android battery exemption after notifications are turn
   assert.match(offer, /Platform[.]OS !== 'android'/)
   assert.match(offer, /isPeerChatBatteryUnrestricted\(\)/)
   assert.match(offer, /openPeerChatBatterySettings\(\)/)
-  // Samsung's sleeping-apps list is separate from the standard dialog, and it
-  // is the one that actually takes the peer offline.
+  // Samsung puts its sleeping-apps list somewhere else, so that sentence is
+  // wrong on a Pixel and only shows on a Samsung.
+  assert.match(offer, /Platform[.]constants\?[.]Manufacturer/)
+  assert.match(offer, /const samsungHint = isSamsung/)
   assert.match(offer, /Sleeping apps/)
 })
