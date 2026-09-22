@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import { readFile } from 'node:fs/promises'
 import test from 'node:test'
 
 import {
@@ -80,4 +81,34 @@ test('PeerChat background service runs only for enabled runtimes with joined roo
   assert.equal(shouldEnablePeerChatBackground({ isRuntimeReady: true, notificationsEnabled: true, roomCount: 0 }), false)
   assert.equal(shouldEnablePeerChatBackground({ isRuntimeReady: true, notificationsEnabled: false, roomCount: 1 }), false)
   assert.equal(shouldEnablePeerChatBackground({ isRuntimeReady: false, notificationsEnabled: true, roomCount: 1 }), false)
+})
+
+test('PeerChat leaves a declined notification prompt alone and deep links to the app page', async () => {
+  const source = await readFile(new URL('../../app/peerchat/notifications.ts', import.meta.url), 'utf8')
+  const request = source.slice(
+    source.indexOf('export async function requestPeerChatNotificationPermission'),
+    source.indexOf('export async function isPeerChatNotificationBlocked')
+  )
+
+  // Declining is an answer. Pushing the user into Settings right after they said
+  // no is what this guards against.
+  assert.equal(request.includes('openSettings'), false)
+  assert.equal(request.includes('Linking.'), false)
+
+  // UIApplication.openNotificationSettingsURLString, iOS 15.4 and newer.
+  assert.match(source, /Linking[.]openURL[(]'app-settings:notifications'[)]/)
+  const openSettings = source.slice(source.indexOf('export async function openPeerChatNotificationSettings'))
+  assert.match(openSettings, /await Linking[.]openSettings[(][)]/)
+})
+
+test('PeerChat only offers notification settings once the system stops asking', async () => {
+  const screen = await readFile(new URL('../../app/peerchat/PeerChatScreen.tsx', import.meta.url), 'utf8')
+  const change = screen.slice(
+    screen.indexOf('function changeNotifications ()'),
+    screen.indexOf('function changeNotificationSounds ()')
+  )
+
+  assert.match(change, /if \(!await isPeerChatNotificationBlocked\(\)\)/)
+  assert.match(change, /openPeerChatNotificationSettings\(\)/)
+  assert.match(change, /Alert[.]alert\(/)
 })
