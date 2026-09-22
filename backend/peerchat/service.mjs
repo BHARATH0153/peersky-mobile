@@ -53,6 +53,11 @@ import { PRE_JOINED_PEERCHAT_ROOM_KEY } from './rooms.mjs'
 
 const MAX_ROOMS = 50
 const MAX_BLOCKED_PEERS = 500
+// Desktop keys its member list by peer id and ships it whole. Avatars are left
+// out on purpose: a room of 64 people carrying data-url pictures blows past the
+// frame cap and the whole list is dropped. Pictures arrive with the profile
+// frame instead.
+const MEMBERS_LIST_CHUNK = 50
 const PEERCHAT_NOTIFY_DEBOUNCE_MS = 40
 const MAX_RETURNED_MESSAGES = 200
 const MAX_RETURNED_ENTRIES = 1000
@@ -1047,6 +1052,15 @@ export class PeerChatService {
       return
     }
 
+    if (message.type === 'members-list') {
+      if (!this.consumeControlRate(peer)) return
+      if (this.mergeMembersList(roomKey, message.members)) {
+        this.schedulePersist()
+        this.bumpVersion()
+      }
+      return
+    }
+
     if (message.type === 'room-meta') {
       if (!this.consumeControlRate(peer)) return
       const room = this.rooms.get(roomKey)
@@ -1225,8 +1239,57 @@ export class PeerChatService {
     return true
   }
 
+  // Everyone who has been in the room, not just whoever we have seen ourselves.
+  // Without this a phone only ever lists the handful of peers it is connected
+  // to, while desktop shows the whole room.
+  shareMembers (peer, roomKey) {
+    const room = this.rooms.get(roomKey)
+    const members = room?.members || []
+    if (members.length === 0) return
+
+    for (let index = 0; index < members.length; index += MEMBERS_LIST_CHUNK) {
+      const chunk = {}
+      for (const member of members.slice(index, index + MEMBERS_LIST_CHUNK)) {
+        if (!member.id || !member.username) continue
+        chunk[member.id] = {
+          username: member.username,
+          bio: member.bio || '',
+          ...(Number.isFinite(member.joinedAt) && { joinedAt: member.joinedAt })
+        }
+      }
+      if (Object.keys(chunk).length === 0) continue
+      this.sendToPeer(peer, { type: 'members-list', roomKey, members: chunk })
+    }
+  }
+
+  mergeMembersList (roomKey, incoming) {
+    const room = this.rooms.get(roomKey)
+    if (!room || !incoming || typeof incoming !== 'object') return false
+
+    const members = Array.isArray(room.members) ? [...room.members] : []
+    const known = new Set(members.map((member) => member.id))
+    let changed = false
+
+    for (const [rawId, value] of Object.entries(incoming)) {
+      const id = normalizePeerChatPeerId(rawId)
+      const username = normalizePeerChatProfileName(value?.username)
+      if (!id || !username || id === this.localId || known.has(id)) continue
+      if (members.length >= MAX_RETURNED_ROOM_MEMBERS - 1) break
+      // joinedAt is deliberately not taken from a third party. It decides which
+      // history a peer is sent, and only that peer gets to announce it.
+      members.push({ id, username, bio: normalizePeerChatBio(value?.bio), avatar: null })
+      known.add(id)
+      changed = true
+    }
+
+    if (!changed) return false
+    room.members = members
+    return true
+  }
+
   shareRoom (peer, roomKey) {
     this.sendRoomMeta(peer, roomKey)
+    this.shareMembers(peer, roomKey)
     this.sendToPeer(peer, {
       type: 'join',
       roomKey,

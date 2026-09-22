@@ -710,6 +710,44 @@ test('PeerChat lists everyone who has spoken in a room, not just the connected p
   await restarted.close()
 })
 
+test('PeerChat exchanges room member lists with peers the desktop way', async (t) => {
+  const storagePath = await mkdtemp(path.join(tmpdir(), 'peersky-peerchat-members-list-'))
+  t.after(() => rm(storagePath, { recursive: true, force: true }))
+  const service = await new PeerChatService({ sdk: createFakeSdk(), storagePath }).start()
+  service.setProfile({ username: 'Alice' })
+  await service.joinRoom({ roomKey: ROOM_KEY })
+
+  const frames = []
+  const peer = createFakePeer('bb00bb00', 'Bob', frames)
+
+  // Desktop keys members by peer id, so the wire shape has to match.
+  await service.handlePeerMessage(peer, {
+    type: 'members-list',
+    roomKey: ROOM_KEY,
+    members: {
+      cc00cc00: { username: 'Carol', bio: 'Third', avatar: null, joinedAt: 1 },
+      dd00dd00: { username: 'Dave', bio: '' },
+      '': { username: 'Nobody' },
+      ee00ee00: { username: '' }
+    }
+  })
+
+  const names = service.listRooms()[0].members.map((member) => member.username).sort()
+  assert.deepEqual(names, ['Alice', 'Carol', 'Dave'])
+
+  // A third party does not get to set a join time: that decides which history
+  // the peer is sent, and only they can announce it.
+  assert.equal(service.peerJoinedAt(ROOM_KEY, 'cc00cc00'), null)
+
+  // And we hand ours back, without avatars, so the frame stays under the cap.
+  service.shareMembers(peer, ROOM_KEY)
+  const shared = frames.find((frame) => frame.type === 'members-list')
+  assert.equal(shared.roomKey, ROOM_KEY)
+  assert.equal(shared.members.cc00cc00.username, 'Carol')
+  assert.equal('avatar' in shared.members.cc00cc00, false)
+  await service.close()
+})
+
 test('PeerChat keeps room for a live member once the feed has filled the member list', async (t) => {
   const storagePath = await mkdtemp(path.join(tmpdir(), 'peersky-peerchat-member-cap-'))
   t.after(() => rm(storagePath, { recursive: true, force: true }))
