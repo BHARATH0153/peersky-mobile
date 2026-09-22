@@ -8,6 +8,7 @@ import { closeHyperRuntime } from './hyper/runtime.mjs'
 import { disconnectP2pmdRoom } from './p2pmd/room.mjs'
 import { closePeerChatService } from './peerchat/runtime.mjs'
 import { stopPeerTunesServer } from './peertunes/server.mjs'
+import { setAppNotifier } from './rpc/notify.mjs'
 import { routeRpcRequest } from './rpc/router.mjs'
 
 const { IPC } = BareKit
@@ -15,7 +16,17 @@ const { IPC } = BareKit
 createRpc()
 
 function createRpc () {
-  return new RPC(IPC, routeRpcRequest)
+  const rpc = new RPC(IPC, routeRpcRequest)
+
+  // Fire and forget: the app acknowledges so the request does not sit pending,
+  // but nothing here waits on it.
+  setAppNotifier((command, payload) => {
+    const request = rpc.request(command)
+    request.send(JSON.stringify(payload))
+    request.reply().catch(() => {})
+  })
+
+  return rpc
 }
 
 Bare.on('beforeExit', async () => {
