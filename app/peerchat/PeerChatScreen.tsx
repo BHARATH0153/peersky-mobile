@@ -50,6 +50,10 @@ import {
   isPeerChatNotificationBlocked,
   openPeerChatNotificationSettings
 } from './notifications'
+import {
+  isPeerChatBatteryUnrestricted,
+  openPeerChatBatterySettings
+} from './background-service'
 import { playPeerChatSound } from './sounds'
 import {
   createPeerChatEmojiEntries,
@@ -381,6 +385,20 @@ export function PeerChatScreen ({
   const visibleEmoji = useMemo(
     () => filterPeerChatEmojiEntries(PEERCHAT_EMOJI_ENTRIES, emojiSearchQuery),
     [emojiSearchQuery]
+  )
+  // Messaging someone offline is allowed. There is no server holding the
+  // message, so it only moves while both sides are running.
+  const offlineDirectPeer = activeRoom?.isDM && activeRoom.dmWith
+    ? activeRoom.members.find((member) => member.id === activeRoom.dmWith && !member.online) || null
+    : null
+  // A block closes the conversation both ways, so the composer is shut whether
+  // we blocked them or they blocked us.
+  const blockedTheDirectMessage = Boolean(
+    activeRoom?.isDM && activeRoom.dmWith &&
+    blockedPeers.some((blocked) => blocked.peerId === activeRoom.dmWith)
+  )
+  const isDirectMessageBlocked = Boolean(
+    activeRoom?.isDM && (activeRoom.blockedByPeer || blockedTheDirectMessage)
   )
 
   useEffect(() => {
@@ -756,6 +774,7 @@ export function PeerChatScreen ({
       const enabled = !notificationsEnabled
       if (await onNotificationsEnabledChange(enabled)) {
         onStatus(enabled ? 'PeerChat notifications enabled' : 'PeerChat notifications disabled')
+        if (enabled) await offerBatteryExemption()
         return
       }
       if (!enabled) throw new Error('Unable to save notification preference.')
@@ -772,6 +791,25 @@ export function PeerChatScreen ({
         ]
       )
     })
+  }
+
+  // Android only. Without the exemption the system puts PeerSky to sleep after
+  // a day or two of not opening it, and the peer silently drops offline.
+  async function offerBatteryExemption () {
+    if (Platform.OS !== 'android') return
+    if (await isPeerChatBatteryUnrestricted()) return
+
+    Alert.alert(
+      'Keep PeerChat reachable',
+      'Android puts apps it thinks are unused to sleep, which takes you offline for everyone. Allowing PeerSky to run without restrictions keeps messages arriving.\n\nOn Samsung also check Battery, Background usage limits, and remove PeerSky from Sleeping apps.',
+      [
+        { text: 'Not now', style: 'cancel' },
+        {
+          text: 'Open settings',
+          onPress: () => void openPeerChatBatterySettings().catch(() => onStatus('Unable to open battery settings'))
+        }
+      ]
+    )
   }
 
   function changeNotificationSounds () {
@@ -1709,8 +1747,8 @@ export function PeerChatScreen ({
                         {member.bio || (member.online ? 'Online' : 'Offline')}
                       </Text>
                     </View>
-                    <Text style={[styles.memberMessage, { color: member.self || !member.online ? colors.muted : colors.accent }]}>
-                      {member.self ? 'You' : member.online ? 'Message' : ''}
+                    <Text style={[styles.memberMessage, { color: member.self ? colors.muted : colors.accent }]}>
+                      {member.self ? 'You' : 'Message'}
                     </Text>
                   </Pressable>
                 ))}
@@ -1748,8 +1786,21 @@ export function PeerChatScreen ({
           <Text style={[styles.dmStatus, { color: colors.danger, backgroundColor: colors.surface }]}>This peer declined the message request.</Text>
         )}
 
-        {activeRoom.isDM && activeRoom.blockedByPeer && (
-          <Text style={[styles.dmStatus, { color: colors.danger, backgroundColor: colors.surface }]}>This peer blocked your direct messages. You can still see each other in shared rooms.</Text>
+        {offlineDirectPeer && !isDirectMessageBlocked && !activeRoom.rejected && (
+          <Text style={[styles.dmStatus, { color: colors.muted, backgroundColor: colors.surface }]}>
+            {offlineDirectPeer.username} is offline. Your message arrives the next time you are both online
+            {Platform.OS === 'ios'
+              ? ', and iOS suspends apps in the background, so keep PeerSky open.'
+              : ', so keep PeerSky running in the background.'}
+          </Text>
+        )}
+
+        {isDirectMessageBlocked && (
+          <Text style={[styles.dmStatus, { color: colors.danger, backgroundColor: colors.surface }]}>
+            {blockedTheDirectMessage
+              ? 'You blocked this person. Unblock them in PeerChat settings to message them again.'
+              : 'This peer blocked your direct messages. You can still see each other in shared rooms.'}
+          </Text>
         )}
 
         {isSearching && (
@@ -2053,7 +2104,7 @@ export function PeerChatScreen ({
           <Pressable
             accessibilityLabel='Choose emoji'
             accessibilityRole='button'
-            disabled={isBusy || activeRoom.pendingAcceptance || activeRoom.rejected || activeRoom.blockedByPeer}
+            disabled={isBusy || activeRoom.pendingAcceptance || activeRoom.rejected || isDirectMessageBlocked}
             onPress={() => {
               setEmojiSearchQuery('')
               setShowComposerEmoji((current) => !current)
@@ -2065,12 +2116,12 @@ export function PeerChatScreen ({
           <Pressable
             accessibilityLabel='Attach file'
             accessibilityRole='button'
-            disabled={isBusy || activeRoom.pendingAcceptance || activeRoom.rejected || activeRoom.blockedByPeer}
+            disabled={isBusy || activeRoom.pendingAcceptance || activeRoom.rejected || isDirectMessageBlocked}
             onPress={attachFile}
             style={[
               styles.attachButton,
               { backgroundColor: colors.input },
-              isBusy || activeRoom.pendingAcceptance || activeRoom.rejected || activeRoom.blockedByPeer ? styles.disabled : null
+              isBusy || activeRoom.pendingAcceptance || activeRoom.rejected || isDirectMessageBlocked ? styles.disabled : null
             ]}
           >
             <Text style={[styles.attachButtonText, { color: colors.accent }]}>+</Text>
@@ -2081,7 +2132,7 @@ export function PeerChatScreen ({
             placeholder='Message'
             placeholderTextColor={colors.muted}
             multiline
-            editable={!activeRoom.pendingAcceptance && !activeRoom.rejected && !activeRoom.blockedByPeer}
+            editable={!activeRoom.pendingAcceptance && !activeRoom.rejected && !isDirectMessageBlocked}
             maxLength={64 * 1024}
             style={[
               styles.composerInput,
@@ -2090,12 +2141,12 @@ export function PeerChatScreen ({
           />
           <Pressable
             accessibilityRole='button'
-            disabled={!composer.trim() || isBusy || activeRoom.pendingAcceptance || activeRoom.rejected || activeRoom.blockedByPeer}
+            disabled={!composer.trim() || isBusy || activeRoom.pendingAcceptance || activeRoom.rejected || isDirectMessageBlocked}
             onPress={sendMessage}
             style={[
               styles.sendButton,
               { backgroundColor: colors.accent },
-              !composer.trim() || isBusy || activeRoom.pendingAcceptance || activeRoom.rejected || activeRoom.blockedByPeer ? styles.disabled : null
+              !composer.trim() || isBusy || activeRoom.pendingAcceptance || activeRoom.rejected || isDirectMessageBlocked ? styles.disabled : null
             ]}
           >
             <SendIcon width={20} height={20} color='#ffffff' />
@@ -3093,19 +3144,19 @@ function PeerProfileModal ({
             {!member.self && (
               <>
                 <Pressable
-                  // A direct message needs the other phone online to accept the
-                  // request, so offline people are listed but not messageable.
-                  accessibilityHint={!member.online && !isBlocked ? 'Available once this person is online' : undefined}
+                  // Offline is fine: the invite is re-sent the moment they
+                  // reconnect, so the room opens now and the note in it
+                  // explains the wait.
                   accessibilityRole='button'
-                  disabled={isBlocked || !member.online}
+                  disabled={isBlocked}
                   onPress={() => onMessage(member)}
                   style={[
                     styles.peerProfileMessage,
-                    { backgroundColor: isBlocked || !member.online ? colors.input : colors.accent }
+                    { backgroundColor: isBlocked ? colors.input : colors.accent }
                   ]}
                 >
-                  <Text style={[styles.profileSaveText, isBlocked || !member.online ? { color: colors.muted } : null]}>
-                    {isBlocked ? 'Blocked' : member.online ? 'Message' : 'Offline'}
+                  <Text style={[styles.profileSaveText, isBlocked ? { color: colors.muted } : null]}>
+                    {isBlocked ? 'Blocked' : 'Message'}
                   </Text>
                 </Pressable>
                 <Pressable

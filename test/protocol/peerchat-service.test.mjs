@@ -734,6 +734,34 @@ test('PeerChat refuses a rename that collides with someone already in a room', a
   await service.close()
 })
 
+test('PeerChat opens a direct room for an offline peer and invites them on reconnect', async (t) => {
+  const storagePath = await mkdtemp(path.join(tmpdir(), 'peersky-peerchat-offline-dm-'))
+  t.after(() => rm(storagePath, { recursive: true, force: true }))
+  const service = await new PeerChatService({ sdk: createFakeSdk(), storagePath }).start()
+  service.setProfile({ username: 'Alice' })
+  await service.joinRoom({ roomKey: ROOM_KEY })
+
+  // Bob was here once, then left. His name is all we have.
+  const bobId = 'bb00bb00'
+  service.rooms.get(ROOM_KEY).members = [{ id: bobId, username: 'Bob', bio: 'Away', avatar: null }]
+
+  const outgoing = await service.createDirectMessage({ peerId: bobId })
+  assert.equal(outgoing.room.isDM, true)
+  assert.equal(outgoing.room.pendingAcceptance, true)
+  assert.equal(outgoing.room.name, 'Bob', 'falls back to the name we last saw')
+
+  const frames = []
+  const bob = createFakePeer(bobId, 'Bob', frames)
+  bob.active = false
+  bob.rooms = [outgoing.room.roomKey]
+  service.pendingPeers.set(bob.connection, bob)
+  service.activatePeer(bob)
+
+  const invite = frames.find((frame) => frame.type === 'dm-invite')
+  assert.equal(invite?.roomKey, outgoing.room.roomKey)
+  await service.close()
+})
+
 test('PeerChat blocking stops direct messages both ways and survives a restart', async (t) => {
   const senderPath = await mkdtemp(path.join(tmpdir(), 'peersky-peerchat-block-sender-'))
   const receiverPath = await mkdtemp(path.join(tmpdir(), 'peersky-peerchat-block-receiver-'))
@@ -766,7 +794,14 @@ test('PeerChat blocking stops direct messages both ways and survives a restart',
   const notice = blockedFrames.pop()
   assert.equal(notice.type, 'dm-blocked')
   await sender.handlePeerMessage(senderViewOfReceiver, notice)
-  assert.equal(sender.listRooms().find((room) => room.roomKey === outgoing.room.roomKey).blockedByPeer, true)
+  const senderSide = sender.listRooms().find((room) => room.roomKey === outgoing.room.roomKey)
+  assert.equal(senderSide.blockedByPeer, true)
+  // A block is not a decline: it reads differently and cannot be retried.
+  assert.equal(senderSide.rejected, false)
+  await assert.rejects(
+    sender.sendMessage({ roomKey: outgoing.room.roomKey, message: 'Still trying' }),
+    /blocked your direct messages/
+  )
 
   // Blocking is one way. Alice can still open the room, Bob cannot start one.
   await assert.rejects(

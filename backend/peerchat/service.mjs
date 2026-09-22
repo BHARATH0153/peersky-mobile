@@ -310,10 +310,13 @@ export class PeerChatService {
   async createDirectMessage ({ peerId, username, bio, avatar } = {}) {
     this.ensureProfile()
     const normalizedPeerId = normalizePeerChatPeerId(peerId)
-    if (!normalizedPeerId || normalizedPeerId === this.localId) throw new Error('Choose another online peer.')
+    if (!normalizedPeerId || normalizedPeerId === this.localId) throw new Error('Choose another peer.')
     if (this.isPeerBlocked(normalizedPeerId)) throw new Error('Unblock this person before messaging them.')
+
+    // An offline peer is allowed. activatePeer re-sends the invite the moment
+    // they connect, so the room opens now and waits rather than failing.
     const peer = [...this.peers.values()].find((candidate) => candidate.id === normalizedPeerId)
-    if (!peer) throw new Error('That peer is no longer connected.')
+    const known = peer || this.findKnownMember(normalizedPeerId)
 
     const roomKey = derivePeerChatDirectRoomKey(this.localId, normalizedPeerId)
     let room = this.rooms.get(roomKey)
@@ -323,9 +326,9 @@ export class PeerChatService {
       room = this.createDirectRoom({
         roomKey,
         peerId: normalizedPeerId,
-        username: normalizePeerChatProfileName(username) || peer.username || normalizedPeerId,
-        bio: normalizePeerChatBio(bio ?? peer.bio),
-        avatar: normalizePeerChatAvatar(avatar ?? peer.avatar),
+        username: normalizePeerChatProfileName(username) || known?.username || normalizedPeerId,
+        bio: normalizePeerChatBio(bio ?? known?.bio),
+        avatar: normalizePeerChatAvatar(avatar ?? known?.avatar),
         pendingAcceptance: true
       })
       this.rooms.set(roomKey, room)
@@ -342,7 +345,7 @@ export class PeerChatService {
       if (createdRoom) this.rooms.delete(roomKey)
       throw error
     }
-    if (room.pendingAcceptance) this.sendDirectMessageControl(peer, 'dm-invite', room)
+    if (room.pendingAcceptance && peer) this.sendDirectMessageControl(peer, 'dm-invite', room)
     this.schedulePersist()
     this.bumpVersion()
     return { room: this.publicRoom(room), rooms: this.listRooms(), version: this.version }
@@ -408,6 +411,16 @@ export class PeerChatService {
       }
     }
     return false
+  }
+
+  // Whatever we last saw of a peer, so a direct room opened while they are
+  // offline still carries their name rather than a hex id.
+  findKnownMember (peerId) {
+    for (const room of this.rooms.values()) {
+      const member = (room.members || []).find((entry) => entry.id === peerId)
+      if (member?.username) return member
+    }
+    return null
   }
 
   isPeerBlocked (peerId) {
@@ -547,6 +560,8 @@ export class PeerChatService {
     if (!room) throw new Error('PeerChat room not found.')
     if (room.isDM && room.pendingAcceptance) throw new Error('Wait for the peer to accept this message request.')
     if (room.isDM && room.rejected) throw new Error('This peer declined the message request.')
+    if (room.isDM && room.blockedByPeer) throw new Error('This peer blocked your direct messages.')
+    if (room.isDM && this.isPeerBlocked(room.dmWith)) throw new Error('Unblock this person before messaging them.')
     if (!this.profile.username) throw new Error('Set a PeerChat name before sending messages.')
     if (!this.feeds.has(normalizedRoomKey)) await this.joinRoomNetwork(normalizedRoomKey)
 
@@ -982,10 +997,9 @@ export class PeerChatService {
       const blockedRoomKey = normalizePeerChatRoomKey(message.roomKey)
       const blockedRoom = this.rooms.get(blockedRoomKey)
       if (!blockedRoom?.isDM || blockedRoom.dmWith !== peer.id) return
-      // Same shape as a rejection so the UI already knows how to show it, but
-      // flagged so we can word it as blocked rather than declined.
+      // Its own flag rather than reusing rejected: a decline can be retried, a
+      // block cannot, and the two read differently to the person seeing it.
       blockedRoom.pendingAcceptance = false
-      blockedRoom.rejected = true
       blockedRoom.blockedByPeer = true
       this.schedulePersist()
       this.bumpVersion()
