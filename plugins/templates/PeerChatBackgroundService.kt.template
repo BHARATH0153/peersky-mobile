@@ -10,6 +10,7 @@ import android.os.Build
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
+import android.util.Log
 import androidx.core.app.NotificationCompat
 
 class PeerChatBackgroundService : Service() {
@@ -64,7 +65,11 @@ class PeerChatBackgroundService : Service() {
   override fun onTaskRemoved(rootIntent: Intent?) {
     super.onTaskRemoved(rootIntent)
     if (!isWanted(this)) return
-    startForegroundService(Intent(this, PeerChatBackgroundService::class.java))
+    try {
+      startForegroundService(Intent(this, PeerChatBackgroundService::class.java))
+    } catch (error: Exception) {
+      Log.w(TAG, "Unable to restart after the task was removed: " + error.message)
+    }
   }
 
   override fun onBind(intent: Intent?): IBinder? = null
@@ -86,6 +91,7 @@ class PeerChatBackgroundService : Service() {
     const val ACTION_TICK = "__PACKAGE_NAME__.PEERCHAT_BACKGROUND_TICK"
     private const val CHANNEL_ID = "peerchat-background-v1"
     private const val NOTIFICATION_ID = 7319
+    private const val TAG = "PeerChatBackground"
     private const val PREFS_NAME = "peerchat-background"
     private const val PREF_WANTED = "wanted"
 

@@ -148,6 +148,10 @@ describe('mobile platform runtime configuration', () => {
     )
     assert.match(bootReceiver, /ACTION_BOOT_COMPLETED/)
     assert.match(bootReceiver, /isWanted\(context\)/)
+    // Android limits which service types may start from a boot broadcast, and
+    // an uncaught refusal inside a receiver crashes the app at boot.
+    assert.match(bootReceiver, /try \{[\s\S]*startForegroundService[\s\S]*catch \(error: Exception\)/)
+    assert.match(backgroundService, /try \{[\s\S]*startForegroundService[\s\S]*catch \(error: Exception\)/)
     // The system broadcasts from its own uid, so a non-exported receiver never
     // runs. Both actions are protected broadcasts and cannot be forged.
     const { addPeerChatBackgroundManifest } = await import('../../plugins/with-peerchat-background.js')
