@@ -1,0 +1,22 @@
+package __PACKAGE_NAME__
+
+import android.content.BroadcastReceiver
+import android.content.Context
+import android.content.Intent
+import androidx.core.content.ContextCompat
+
+// Without this a reboot ends the background connection for good, because
+// nothing starts the service again until the user opens PeerSky.
+class PeerChatBootReceiver : BroadcastReceiver() {
+  override fun onReceive(context: Context?, intent: Intent?) {
+    if (context == null) return
+    if (intent?.action != Intent.ACTION_BOOT_COMPLETED &&
+      intent?.action != Intent.ACTION_MY_PACKAGE_REPLACED
+    ) return
+    if (!PeerChatBackgroundService.isWanted(context)) return
+    ContextCompat.startForegroundService(
+      context,
+      Intent(context, PeerChatBackgroundService::class.java)
+    )
+  }
+}
