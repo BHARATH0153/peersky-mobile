@@ -1282,13 +1282,27 @@ export class PeerChatService {
     if (!room || !incoming || typeof incoming !== 'object') return false
 
     const members = Array.isArray(room.members) ? [...room.members] : []
-    const known = new Set(members.map((member) => member.id))
     let changed = false
 
     for (const [rawId, value] of Object.entries(incoming)) {
       const id = normalizePeerChatPeerId(rawId)
       const username = normalizePeerChatProfileName(value?.username)
-      if (!id || !username || id === this.localId || known.has(id)) continue
+      if (!id || !username || id === this.localId) continue
+
+      const index = members.findIndex((member) => member.id === id)
+      if (index >= 0) {
+        // Someone lifted out of the feed arrives with a name and nothing else.
+        // Fill the gaps from a peer that knows them, but never overwrite what
+        // we have seen from that person directly.
+        const existing = members[index]
+        const avatar = existing.avatar || normalizePeerChatAvatar(value?.avatar)
+        const bio = existing.bio || normalizePeerChatBio(value?.bio)
+        if (avatar === existing.avatar && bio === existing.bio) continue
+        members[index] = { ...existing, avatar, bio }
+        changed = true
+        continue
+      }
+
       if (members.length >= MAX_RETURNED_ROOM_MEMBERS - 1) break
       // joinedAt is deliberately not taken from a third party. It decides which
       // history a peer is sent, and only that peer gets to announce it.
@@ -1298,7 +1312,6 @@ export class PeerChatService {
         bio: normalizePeerChatBio(value?.bio),
         avatar: normalizePeerChatAvatar(value?.avatar)
       })
-      known.add(id)
       changed = true
     }
 

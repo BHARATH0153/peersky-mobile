@@ -745,6 +745,26 @@ test('PeerChat exchanges room member lists with peers the desktop way', async (t
   // Pictures ride along, so an offline member is not a grey circle.
   assert.equal(service.listRooms()[0].members.find((m) => m.id === 'cc00cc00').avatar, CAROL_AVATAR)
 
+  // Someone already lifted out of the feed has a name and nothing else. A peer
+  // that knows them fills in the rest rather than being ignored as a duplicate.
+  service.rooms.get(ROOM_KEY).members.push({ id: '11002200', username: 'Eve', bio: '', avatar: null })
+  await service.handlePeerMessage(peer, {
+    type: 'members-list',
+    roomKey: ROOM_KEY,
+    members: { 11002200: { username: 'Eve', bio: 'Back again', avatar: CAROL_AVATAR } }
+  })
+  const eve = service.listRooms()[0].members.find((m) => m.id === '11002200')
+  assert.equal(eve.avatar, CAROL_AVATAR)
+  assert.equal(eve.bio, 'Back again')
+
+  // What we have seen from that person directly always wins.
+  await service.handlePeerMessage(peer, {
+    type: 'members-list',
+    roomKey: ROOM_KEY,
+    members: { 11002200: { username: 'Eve', bio: 'Stale', avatar: null } }
+  })
+  assert.equal(service.listRooms()[0].members.find((m) => m.id === '11002200').bio, 'Back again')
+
   // And we hand ours back the same way.
   service.shareMembers(peer, ROOM_KEY)
   const shared = frames.find((frame) => frame.type === 'members-list')
