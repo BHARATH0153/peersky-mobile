@@ -322,3 +322,57 @@ test('the scan resolves the type only once it holds the bytes', async () => {
   // Video is still rejected up front, so a large clip is never read into memory.
   assert.ok(fn.indexOf("declared.startsWith('video/')") < fn.indexOf('await new File(asset.uri).base64()'))
 })
+
+test('a folder upload screens every file in it before any of them go', async () => {
+  const gate = await readFile(new URL('../../app/media/upload-gate.ts', import.meta.url), 'utf8')
+  const fn = gate.slice(gate.indexOf('export async function pickUploadFolder'), gate.indexOf('* The one place every upload'))
+
+  // Same rule as a hand-picked batch: screen everything, then decide once.
+  assert.ok(fn.indexOf('scanAsset(asset)') < fn.indexOf('screenUploadBatch(screened)'))
+  assert.match(fn, /if \(!decision\.allowed\)/)
+  assert.match(fn, /throw new Error\(decision\.reason\)/)
+
+  // A refused folder must not leave its staged copies behind.
+  const refusal = fn.slice(fn.indexOf('if (!decision.allowed)'))
+  assert.match(refusal, /staging\.delete\(\)/)
+})
+
+test('a folder walk is bounded in both depth and count', async () => {
+  const gate = await readFile(new URL('../../app/media/upload-gate.ts', import.meta.url), 'utf8')
+
+  const files = gate.match(/MAX_FOLDER_FILES = (\d+)/)
+  const depth = gate.match(/MAX_FOLDER_DEPTH = (\d+)/)
+  assert.ok(files && Number(files[1]) > 0 && Number(files[1]) <= 200, 'an unbounded folder would screen forever')
+  assert.ok(depth && Number(depth[1]) > 0 && Number(depth[1]) <= 10, 'a pathological tree must not walk forever')
+
+  // Both limits are actually enforced in the walk, not just declared.
+  const walk = gate.slice(gate.indexOf('function collectFiles'), gate.indexOf('export async function pickUploadFolder'))
+  assert.match(walk, /depth > MAX_FOLDER_DEPTH \|\| into\.length >= MAX_FOLDER_FILES/)
+  assert.match(walk, /if \(into\.length >= MAX_FOLDER_FILES\) return/)
+  // A zero byte entry breaks the backend size guard.
+  assert.match(walk, /\(entry\.size \?\? 0\) > 0/)
+})
+
+test('the backend opens staged folder files and nothing else', async () => {
+  const library = await readFile(new URL('../../backend/hyper/library.mjs', import.meta.url), 'utf8')
+  const gate = await readFile(new URL('../../app/media/upload-gate.ts', import.meta.url), 'utf8')
+
+  // The originals live outside the sandbox, and on Android behind a content
+  // uri the backend cannot open, so a folder stages its files first.
+  const staging = gate.match(/STAGING_FOLDER = '([\w-]+)'/)
+  assert.ok(staging)
+  assert.ok(library.includes(`documentpicker|${staging[1]}`), 'the backend must accept the staging folder')
+
+  // And still nothing outside those two.
+  assert.match(library, /parsed\.protocol !== 'file:'/)
+  assert.match(library, /segment === '\.\.'/)
+})
+
+test('Hyperdrive routes a folder through the same gate as files', async () => {
+  const screen = await readFile(new URL('../../app/hyperdrive/HyperdriveScreen.tsx', import.meta.url), 'utf8')
+  const upload = screen.slice(screen.indexOf('async function uploadFile ('), screen.indexOf('async function fetchLocation'))
+
+  assert.match(upload, /source === 'folder' \? await pickUploadFolder\(\) : await pickUploads/)
+  // Never the raw picker, which would skip the screen.
+  assert.doesNotMatch(screen, /DocumentPicker\.getDocumentAsync/)
+})

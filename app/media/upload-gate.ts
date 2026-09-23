@@ -1,5 +1,5 @@
 import * as DocumentPicker from 'expo-document-picker'
-import { File } from 'expo-file-system'
+import { Directory, File, Paths } from 'expo-file-system'
 import { AppState } from 'react-native'
 
 import {
@@ -94,6 +94,79 @@ async function scanAsset (asset: UploadAsset) {
     // rather than cleared.
     return MEDIA_UNSCANNED
   }
+}
+
+// A folder holds more than a hand-picked batch would, but not without limit:
+// every picture in it is screened, and each one costs a moment.
+const MAX_FOLDER_FILES = 50
+// Deep enough for an ordinary photo folder, shallow enough that a pathological
+// tree cannot walk forever.
+const MAX_FOLDER_DEPTH = 5
+// The backend only opens files it copied itself, so a picked folder's contents
+// are staged here first. On Android the originals sit behind a content uri it
+// cannot open at all.
+const STAGING_FOLDER = 'peersky-upload'
+
+function collectFiles (folder: Directory, depth: number, into: File[]) {
+  if (depth > MAX_FOLDER_DEPTH || into.length >= MAX_FOLDER_FILES) return
+  for (const entry of folder.list()) {
+    if (into.length >= MAX_FOLDER_FILES) return
+    if (entry instanceof Directory) collectFiles(entry, depth + 1, into)
+    // A zero byte entry is nothing worth uploading and breaks the size guard.
+    else if ((entry.size ?? 0) > 0) into.push(entry)
+  }
+}
+
+/**
+ * Picks a folder and screens everything in it, the same gate a hand-picked
+ * batch goes through. The files are copied into a staging folder first: the
+ * originals live outside the sandbox, and on Android behind a content uri the
+ * backend cannot open.
+ */
+export async function pickUploadFolder (): Promise<UploadAsset[]> {
+  if (abandonPick) return []
+
+  let folder: Directory
+  try {
+    folder = await Directory.pickDirectoryAsync()
+  } catch {
+    // Cancelling is the ordinary case and is not worth an error.
+    return []
+  }
+
+  const found: File[] = []
+  collectFiles(folder, 0, found)
+  if (found.length === 0) throw new Error('That folder has no files in it.')
+
+  const staging = new Directory(Paths.cache, STAGING_FOLDER)
+  if (staging.exists) staging.delete()
+  staging.create()
+
+  const assets: UploadAsset[] = found.map((source, index) => {
+    // Prefixed, so two files with the same name in different subfolders do not
+    // overwrite each other on the way through.
+    const name = source.name || `file-${index}`
+    const target = new File(staging, `${index}-${name}`)
+    source.copy(target)
+    return {
+      uri: target.uri,
+      name,
+      size: target.size ?? source.size ?? 0,
+      mimeType: ''
+    }
+  })
+
+  const screened = await Promise.all(assets.map(async (asset) => ({
+    fileName: asset.name,
+    verdict: await scanAsset(asset)
+  })))
+  const decision = screenUploadBatch(screened)
+  if (!decision.allowed) {
+    staging.delete()
+    throw new Error(decision.reason)
+  }
+
+  return assets
 }
 
 /**

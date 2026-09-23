@@ -251,7 +251,11 @@ function normalizeLocalUploadFile (fileUri, byteLength) {
     if (
       normalizedPath.includes('\0') ||
       normalizedPath.split('/').some((segment) => segment === '..') ||
-      !/\/(?:cache|caches)\/documentpicker\//i.test(normalizedPath)
+      // documentpicker is where the file picker copies a single pick. A folder
+      // upload stages its files under peersky-upload instead, because the
+      // originals live outside the sandbox and, on Android, behind a content
+      // uri the backend cannot open.
+      !/\/(?:cache|caches)\/(?:documentpicker|peersky-upload)\//i.test(normalizedPath)
     ) return null
 
     return { path: filepath, byteLength }

@@ -17,7 +17,7 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { CameraView, useCameraPermissions } from 'expo-camera'
 import { File } from 'expo-file-system'
-import { pickUploads, type UploadAsset } from '../media/upload-gate'
+import { pickUploadFolder, pickUploads, type UploadAsset } from '../media/upload-gate'
 import ArrowLeftIcon from '../../assets/icons/bootstrap/arrow-left.svg'
 import ChevronRightIcon from '../../assets/icons/bootstrap/chevron-right.svg'
 import CopyIcon from '../../assets/icons/bootstrap/copy.svg'
@@ -49,6 +49,7 @@ const hyperdriveIcon = require('../../assets/images/hyperdrive.png')
 type RecentSource = 'fetched' | 'uploaded'
 type RecentFilter = 'all' | RecentSource
 type UploadVisibility = 'public' | 'private' | 'device'
+type UploadSource = 'files' | 'folder'
 
 type HyperdriveItem = {
   type: 'directory' | 'file'
@@ -223,30 +224,42 @@ export function HyperdriveScreen ({ offlineNetworkAllowed, isDark, isLandscape, 
     }
   }
 
-  function chooseUploadVisibility () {
+  function chooseUploadSource () {
     if (busyAction) return
+    Alert.alert(
+      'Upload to Hyperdrive',
+      'A folder keeps its files together. Everything in it is screened the same way single files are.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        { text: 'Files', onPress: () => chooseUploadVisibility('files') },
+        { text: 'Folder', onPress: () => chooseUploadVisibility('folder') }
+      ]
+    )
+  }
+
+  function chooseUploadVisibility (source: UploadSource) {
     Alert.alert(
       'Choose where to store the file',
       'Public files can be shared, and anyone with one public link may browse other files in your public drive. Private files are encrypted and locked with a key that lives on this phone: sharing a link is safe, but only a device holding the key can open the drive. Paste an identity-transfer URL in Settings to adopt a drive published on the desktop browser; a phone-created keyed drive has no export path yet, so it stays on this phone. This device only keeps files on this phone and never syncs.',
       [
         { text: 'Cancel', style: 'cancel' },
-        { text: 'Private', onPress: () => void uploadFile('private') },
-        { text: 'This device only', onPress: () => void uploadFile('device') },
-        { text: 'Public', onPress: () => void uploadFile('public') }
+        { text: 'Private', onPress: () => void uploadFile('private', source) },
+        { text: 'This device only', onPress: () => void uploadFile('device', source) },
+        { text: 'Public', onPress: () => void uploadFile('public', source) }
       ]
     )
   }
 
-  async function uploadFile (visibility: UploadVisibility) {
+  async function uploadFile (visibility: UploadVisibility, source: UploadSource = 'files') {
     if (busyAction) return
 
     setError(null)
     setNotice(null)
     let assets: UploadAsset[] = []
     try {
-      // Same gate as PeerChat and P2PMD: bounded batch, every file screened
-      // before any of it is uploaded.
-      assets = await pickUploads({ multiple: true })
+      // Same gate as PeerChat and P2PMD either way: bounded batch, every file
+      // screened before any of it is uploaded.
+      assets = source === 'folder' ? await pickUploadFolder() : await pickUploads({ multiple: true })
     } catch (pickError) {
       setError(pickError instanceof Error ? pickError.message : String(pickError))
       return
@@ -256,7 +269,10 @@ export function HyperdriveScreen ({ offlineNetworkAllowed, isDark, isLandscape, 
     setBusyAction('upload')
     try {
       let lastItem = null
-      for (const asset of assets) {
+      for (const [index, asset] of assets.entries()) {
+        // A folder can carry fifty files. Without this the spinner is
+        // indistinguishable from the app having hung.
+        if (assets.length > 1) setNotice(`Uploading ${index + 1} of ${assets.length}: ${asset.name}`)
         const response = await onCallRpc(RPC_HYPER_LIBRARY_UPLOAD, {
           name: asset.name,
           fileUri: asset.uri,
@@ -455,7 +471,7 @@ export function HyperdriveScreen ({ offlineNetworkAllowed, isDark, isLandscape, 
         <Pressable
           accessibilityRole='button'
           disabled={Boolean(busyAction)}
-          onPress={chooseUploadVisibility}
+          onPress={chooseUploadSource}
           style={({ pressed }) => [styles.primaryAction, { backgroundColor: palette.accent }, pressed ? styles.pressed : null, busyAction ? styles.disabled : null]}
         >
           {busyAction === 'upload' ? <ActivityIndicator color='#ffffff' /> : <UploadIcon width={20} height={20} color='#ffffff' />}

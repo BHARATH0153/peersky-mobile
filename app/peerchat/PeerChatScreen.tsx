@@ -3344,7 +3344,7 @@ const PEERCHAT_ABOUT = [
   },
   {
     q: 'Can people send anything they like?',
-    a: 'Photos are checked before they are sent, and again when they arrive, so an explicit one is refused either way. That covers what you post, your profile picture and a room picture. Text goes through a filter for abuse, slurs and adult links.'
+    a: 'Photos are checked before they are sent, and again when they arrive, so an explicit one is refused either way. That covers what you post, your profile picture, a room picture, and anything inside a folder you upload. Text goes through a filter for abuse, slurs and adult links.'
   },
   {
     q: 'Someone is bothering me',
