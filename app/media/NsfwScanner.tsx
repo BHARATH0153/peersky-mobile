@@ -128,22 +128,29 @@ export async function scanMedia (asset: {
 // six megabyte page handed over as a prop fails on Android, so this is what
 // reaches both.
 async function stageScannerFiles () {
+  // Rebuilt from scratch every launch. Keeping whatever was already there
+  // meant a truncated copy from an earlier build survived forever, and no
+  // amount of fixing the classifier could take effect. Copying a few megabytes
+  // file to file is cheap next to being silently broken.
   const folder = new Directory(Paths.cache, 'peersky-nsfw')
-  if (!folder.exists) folder.create()
+  if (folder.exists) folder.delete()
+  folder.create()
 
   for (const [module, name] of [
     [require('../../assets/nsfw/nsfwjs.txt'), NSFW_LIBRARY_FILE],
     [require('../../assets/nsfw/model-data.txt'), NSFW_MODEL_FILE]
   ] as Array<[number, string]>) {
-    const target = new File(folder, name)
-    if (target.exists) continue
     const asset = Asset.fromModule(module)
     await asset.downloadAsync()
-    new File(asset.localUri || asset.uri).copy(target)
+    const source = new File(asset.localUri || asset.uri)
+    const target = new File(folder, name)
+    source.copy(target)
+    if (!target.exists || (target.size ?? 0) < 1000) {
+      throw new Error(`${name} did not stage (${target.size ?? 0} bytes)`)
+    }
   }
 
   const page = new File(folder, NSFW_PAGE_FILE)
-  if (page.exists) page.delete()
   page.create()
   page.write(buildNsfwScannerPage())
   return { folder: folder.uri, page: page.uri }

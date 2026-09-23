@@ -142,19 +142,29 @@ export async function pickUploadFolder (): Promise<UploadAsset[]> {
   if (staging.exists) staging.delete()
   staging.create()
 
-  const assets: UploadAsset[] = found.map((source, index) => {
+  const assets: UploadAsset[] = []
+  for (const [index, source] of found.entries()) {
     // Prefixed, so two files with the same name in different subfolders do not
     // overwrite each other on the way through.
     const name = source.name || `file-${index}`
     const target = new File(staging, `${index}-${name}`)
-    source.copy(target)
-    return {
+    try {
+      source.copy(target)
+    } catch {
+      // On Android a picked folder hands back content:// uris, and copy refuses
+      // those outright: "This method cannot be used with content URIs". Reading
+      // the bytes and writing them goes through the same provider that opened
+      // the folder, so it works where copy does not.
+      if (!target.exists) target.create()
+      target.write(await source.bytes())
+    }
+    assets.push({
       uri: target.uri,
       name,
       size: target.size ?? source.size ?? 0,
       mimeType: ''
-    }
-  })
+    })
+  }
 
   const screened = await Promise.all(assets.map(async (asset) => ({
     fileName: asset.name,

@@ -2,6 +2,7 @@ import { useEffect, useState, useRef } from 'react'
 import {
   ActivityIndicator,
   Alert,
+  Platform,
   Animated,
   Clipboard,
   Easing,
@@ -242,11 +243,14 @@ export function HyperdriveScreen ({ offlineNetworkAllowed, isDark, isLandscape, 
       'Choose where to store the file',
       'Public files can be shared, and anyone with one public link may browse other files in your public drive. Private files are encrypted and locked with a key that lives on this phone: sharing a link is safe, but only a device holding the key can open the drive. Paste an identity-transfer URL in Settings to adopt a drive published on the desktop browser; a phone-created keyed drive has no export path yet, so it stays on this phone. This device only keeps files on this phone and never syncs.',
       [
-        { text: 'Cancel', style: 'cancel' },
+        // Android renders at most three buttons and silently drops the rest,
+        // which is why Public was missing there. Back dismisses instead.
+        ...(Platform.OS === 'android' ? [] : [{ text: 'Cancel', style: 'cancel' as const }]),
         { text: 'Private', onPress: () => void uploadFile('private', source) },
         { text: 'This device only', onPress: () => void uploadFile('device', source) },
         { text: 'Public', onPress: () => void uploadFile('public', source) }
-      ]
+      ],
+      { cancelable: true }
     )
   }
 

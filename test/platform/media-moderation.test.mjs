@@ -380,3 +380,40 @@ test('Hyperdrive routes a folder through the same gate as files', async () => {
   // Never the raw picker, which would skip the screen.
   assert.doesNotMatch(screen, /DocumentPicker\.getDocumentAsync/)
 })
+
+test('the classifier is staged fresh, so a bad copy cannot outlive a fix', async () => {
+  const host = await readFile(new URL('../../app/media/NsfwScanner.tsx', import.meta.url), 'utf8')
+  const fn = host.slice(host.indexOf('async function stageScannerFiles'), host.indexOf('export function NsfwScanner'))
+
+  // Keeping whatever was already there meant a truncated copy from an earlier
+  // build survived forever and no fix could take effect.
+  assert.match(fn, /if \(folder\.exists\) folder\.delete\(\)/)
+  assert.doesNotMatch(fn, /if \(target\.exists\) continue/)
+
+  // And a copy that did not land must be loud, not silently unscreened.
+  assert.match(fn, /did not stage/)
+})
+
+test('a picked folder survives Android content uris', async () => {
+  const gate = await readFile(new URL('../../app/media/upload-gate.ts', import.meta.url), 'utf8')
+  const fn = gate.slice(gate.indexOf('export async function pickUploadFolder'), gate.indexOf('* The one place every upload'))
+
+  // copy() refuses a content:// uri outright, which is how every folder upload
+  // on Android died. Reading the bytes goes through the same provider.
+  assert.match(fn, /source\.copy\(target\)/)
+  assert.match(fn, /target\.write\(await source\.bytes\(\)\)/)
+  assert.ok(fn.indexOf('source.copy(target)') < fn.indexOf('await source.bytes()'), 'copy is tried first')
+})
+
+test('every storage choice is reachable on Android', async () => {
+  const screen = await readFile(new URL('../../app/hyperdrive/HyperdriveScreen.tsx', import.meta.url), 'utf8')
+  const fn = screen.slice(screen.indexOf('function chooseUploadVisibility'), screen.indexOf('async function uploadFile'))
+
+  // Android renders at most three Alert buttons and drops the rest, which is
+  // why Public never appeared there.
+  assert.match(fn, /Platform\.OS === 'android' \? \[\] :/)
+  assert.match(fn, /cancelable: true/)
+  for (const option of ['private', 'device', 'public']) {
+    assert.ok(fn.includes(`uploadFile('${option}'`), `${option} must be offered`)
+  }
+})
