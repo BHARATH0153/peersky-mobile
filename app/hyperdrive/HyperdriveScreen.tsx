@@ -16,8 +16,8 @@ import {
 } from 'react-native'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { CameraView, useCameraPermissions } from 'expo-camera'
-import * as DocumentPicker from 'expo-document-picker'
 import { File } from 'expo-file-system'
+import { pickUploads, type UploadAsset } from '../media/upload-gate'
 import ArrowLeftIcon from '../../assets/icons/bootstrap/arrow-left.svg'
 import ChevronRightIcon from '../../assets/icons/bootstrap/chevron-right.svg'
 import CopyIcon from '../../assets/icons/bootstrap/copy.svg'
@@ -239,35 +239,41 @@ export function HyperdriveScreen ({ offlineNetworkAllowed, isDark, isLandscape, 
 
   async function uploadFile (visibility: UploadVisibility) {
     if (busyAction) return
-    const selection = await DocumentPicker.getDocumentAsync({ copyToCacheDirectory: true, multiple: false })
-    if (selection.canceled || !selection.assets[0]) return
 
-    const asset = selection.assets[0]
-    const file = new File(asset.uri)
-    const fileSize = asset.size ?? file.size
-    if (!Number.isSafeInteger(fileSize) || !fileSize) {
-      setError('Choose a non-empty file.')
-      return
-    }
-
-    setBusyAction('upload')
     setError(null)
     setNotice(null)
+    let assets: UploadAsset[] = []
     try {
-      const response = await onCallRpc(RPC_HYPER_LIBRARY_UPLOAD, {
-        name: asset.name,
-        fileUri: file.uri,
-        byteLength: fileSize,
-        visibility
-      })
-      if (!response.ok || !response.item) throw new Error(response.error || 'Upload failed.')
-      const uploadedItem = { ...response.item, localUri: file.uri }
-      remember(uploadedItem, 'uploaded')
-      onStatus(`Uploaded ${response.item.name}`)
-      const uploadMessage = getUploadSuccessMessage(visibility, response.item)
+      // Same gate as PeerChat and P2PMD: bounded batch, every file screened
+      // before any of it is uploaded.
+      assets = await pickUploads({ multiple: true })
+    } catch (pickError) {
+      setError(pickError instanceof Error ? pickError.message : String(pickError))
+      return
+    }
+    if (assets.length === 0) return
+
+    setBusyAction('upload')
+    try {
+      let lastItem = null
+      for (const asset of assets) {
+        const response = await onCallRpc(RPC_HYPER_LIBRARY_UPLOAD, {
+          name: asset.name,
+          fileUri: asset.uri,
+          byteLength: asset.size,
+          visibility
+        })
+        if (!response.ok || !response.item) throw new Error(response.error || 'Upload failed.')
+        lastItem = { ...response.item, localUri: asset.uri }
+        remember(lastItem, 'uploaded')
+      }
+      if (!lastItem) return
+
+      onStatus(assets.length === 1 ? `Uploaded ${lastItem.name}` : `Uploaded ${assets.length} files`)
+      const uploadMessage = getUploadSuccessMessage(visibility, lastItem)
       Alert.alert('Uploaded to Hyperdrive', uploadMessage, [
         { text: 'Done' },
-        { text: 'Open', onPress: () => onOpenItem(uploadedItem) }
+        { text: 'Open', onPress: () => onOpenItem(lastItem) }
       ])
     } catch (uploadError) {
       setError(uploadError instanceof Error ? uploadError.message : String(uploadError))

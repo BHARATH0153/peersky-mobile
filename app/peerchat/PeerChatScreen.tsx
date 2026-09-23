@@ -1,10 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import Constants from 'expo-constants'
 import { File, Paths } from 'expo-file-system'
-import * as DocumentPicker from 'expo-document-picker'
 import { ImageManipulator, SaveFormat } from 'expo-image-manipulator'
 import { useVideoPlayer, VideoView } from 'expo-video'
-import { SafeAreaView } from 'react-native-safe-area-context'
+import { initialWindowMetrics, SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context'
 import {
   ActivityIndicator,
   Alert,
@@ -100,6 +99,9 @@ import SendIcon from '../../assets/icons/peerchat/send.svg'
 import SettingsIcon from '../../assets/icons/peerchat/settings.svg'
 import { CameraView, useCameraPermissions } from 'expo-camera'
 import { buildPeerChatInviteUrl, parsePeerChatInvite } from './peerchat-invite.mjs'
+import { pickUploads } from '../media/upload-gate'
+import { getMediaScannerStatus, onMediaScannerStatus, scanMedia } from '../media/NsfwScanner'
+import { MEDIA_BLOCKED } from '../media/media-moderation.mjs'
 
 type PeerChatMessage = {
   id: string
@@ -254,6 +256,12 @@ type PeerChatBlockedPeer = {
   blockedAt: number
 }
 
+// A refused upload or a failed send has to survive long enough to be read.
+const ERROR_MIN_VISIBLE_MS = 5000
+// A large video streams slowly, so this is generous. It is only here so a
+// stalled upload cannot lock the composer for the rest of the session.
+const UPLOAD_TIMEOUT_MS = 3 * 60 * 1000
+
 const PEERCHAT_SOURCE_URL = 'https://github.com/p2plabsxyz/peerchat'
 
 const QUICK_REACTIONS = ['👍', '❤️', '😂', '😮', '😢', '🔥']
@@ -334,6 +342,7 @@ export function PeerChatScreen ({
   const [roomSpamRateLimit, setRoomSpamRateLimit] = useState(10)
   const [joinKey, setJoinKey] = useState('')
   const [isScanningInvite, setIsScanningInvite] = useState(false)
+  const [scannerStatus, setScannerStatus] = useState(getMediaScannerStatus())
   const [blockedPeers, setBlockedPeers] = useState<PeerChatBlockedPeer[]>([])
   const [cameraPermission, requestCameraPermission] = useCameraPermissions()
   const inviteScanHandledRef = useRef(false)
@@ -347,6 +356,9 @@ export function PeerChatScreen ({
   const [messageActionTarget, setMessageActionTarget] = useState<PeerChatMessage | null>(null)
   const [roomActionTarget, setRoomActionTarget] = useState<PeerChatRoom | null>(null)
   const [profileTarget, setProfileTarget] = useState<PeerChatMember | null>(null)
+  // A refresh clears the error, and refreshes now arrive the moment anything
+  // changes, so a message could be gone before it had been read.
+  const errorShownAtRef = useRef(0)
   const [mediaTarget, setMediaTarget] = useState<PeerChatMediaTarget | null>(null)
   const [isConfirmingRoomLeave, setIsConfirmingRoomLeave] = useState(false)
   const [isMessageInfoVisible, setIsMessageInfoVisible] = useState(false)
@@ -453,6 +465,8 @@ export function PeerChatScreen ({
       cancelled = true
     }
   }, [])
+
+  useEffect(() => onMediaScannerStatus(setScannerStatus), [])
 
   useEffect(() => {
     mountedRef.current = true
@@ -636,10 +650,10 @@ export function PeerChatScreen ({
         setMessages(response.messages)
       }
       if (Number.isSafeInteger(response.version)) versionRef.current = response.version as number
-      setError(null)
+      clearReadError()
     } catch (cause) {
       if (mountedRef.current && activeRoomRef.current?.roomKey === room.roomKey) {
-        setError(cause instanceof Error ? cause.message : String(cause))
+        showError(cause instanceof Error ? cause.message : String(cause))
       }
     } finally {
       pollInFlightRef.current = false
@@ -750,6 +764,16 @@ export function PeerChatScreen ({
     setShowPeerChatSettings(true)
   }
 
+  function showError (message: string) {
+    errorShownAtRef.current = Date.now()
+    setError(message)
+  }
+
+  function clearReadError () {
+    if (Date.now() - errorShownAtRef.current < ERROR_MIN_VISIBLE_MS) return
+    setError(null)
+  }
+
   async function runAction (action: () => Promise<void>) {
     if (actionInFlightRef.current) return
     actionInFlightRef.current = true
@@ -763,7 +787,7 @@ export function PeerChatScreen ({
         if (message.startsWith('Message blocked:')) {
           setModerationWarning(message.replace(/^Message blocked:\s*/, ''))
         } else {
-          setError(message)
+          showError(message)
         }
         onStatus(message)
       }
@@ -835,20 +859,11 @@ export function PeerChatScreen ({
   function chooseAvatar (current: string | null, onChange: (avatar: string | null) => void) {
     if (isBusy) return
     const select = () => void runAction(async () => {
-      const selection = await DocumentPicker.getDocumentAsync({
-        type: 'image/*',
-        copyToCacheDirectory: true,
-        multiple: false
-      })
-      if (selection.canceled || !selection.assets[0]) return
-
-      const asset = selection.assets[0]
-      const file = new File(asset.uri)
-      const size = asset.size ?? file.size
-      if (!Number.isSafeInteger(size) || Number(size) < 1) {
-        throw new Error('Unable to read the selected image.')
-      }
-      if (Number(size) > MAX_PEERCHAT_AVATAR_SOURCE_BYTES) {
+      // A profile picture is broadcast to everyone in your rooms, so it goes
+      // through the same gate as an attachment.
+      const [asset] = await pickUploads({ type: 'image/*' })
+      if (!asset) return
+      if (asset.size > MAX_PEERCHAT_AVATAR_SOURCE_BYTES) {
         throw new Error('Choose an image smaller than 25 MB.')
       }
 
@@ -1277,41 +1292,61 @@ export function PeerChatScreen ({
     })
   }
 
+  async function withUploadTimeout (work: Promise<PeerChatResponse>, fileName: string) {
+    let timer: ReturnType<typeof setTimeout> | null = null
+    try {
+      return await Promise.race([
+        work,
+        new Promise<PeerChatResponse>((_resolve, reject) => {
+          timer = setTimeout(
+            () => reject(new Error(`${fileName} is taking too long to upload. It may be too large to share here.`)),
+            UPLOAD_TIMEOUT_MS
+          )
+        })
+      ])
+    } finally {
+      if (timer) clearTimeout(timer)
+    }
+  }
+
   function attachFile () {
     if (!activeRoom || isBusy) return
     void runAction(async () => {
-      const selection = await DocumentPicker.getDocumentAsync({
-        copyToCacheDirectory: true,
-        multiple: false
-      })
-      if (selection.canceled || !selection.assets[0]) return
+      // pickUploads bounds the batch and screens every file before any of it
+      // is uploaded, so a refusal never leaves half a send in the room.
+      const assets = await pickUploads({ multiple: true })
+      if (assets.length === 0) return
 
-      const asset = selection.assets[0]
-      const file = new File(asset.uri)
-      const fileSize = asset.size ?? file.size
-      if (!Number.isSafeInteger(fileSize) || !fileSize) {
-        throw new Error('Choose a non-empty file.')
+      for (const [index, asset] of assets.entries()) {
+        // A video takes a while to encrypt and write, and without this the
+        // spinner is indistinguishable from the app having hung.
+        onStatus(assets.length === 1
+          ? `Uploading ${asset.name}`
+          : `Uploading ${index + 1} of ${assets.length}: ${asset.name}`)
+        // A safety net, not a deadline. The upload streams to a Hyperdrive and
+        // always replies in the ordinary case; this only exists so a stall can
+        // never leave the composer stuck busy with no way out.
+        const upload = await withUploadTimeout(callRpc(RPC_PEERCHAT_ATTACHMENT_UPLOAD, {
+          roomKey: activeRoom.roomKey,
+          fileUri: asset.uri,
+          byteLength: asset.size
+        }), asset.name)
+        if (!upload.ok || !upload.item) throw new Error(upload.error || 'Unable to upload attachment.')
+
+        const response = await callRpc(RPC_PEERCHAT_SEND, {
+          roomKey: activeRoom.roomKey,
+          message: upload.item.url,
+          fileName: asset.name,
+          fileSize: upload.item.byteLength ?? asset.size,
+          fileEnc: true
+        })
+        if (!response.ok) throw new Error(response.error || 'Unable to send attachment.')
       }
 
-      const upload = await callRpc(RPC_PEERCHAT_ATTACHMENT_UPLOAD, {
-        roomKey: activeRoom.roomKey,
-        fileUri: file.uri,
-        byteLength: fileSize
-      })
-      if (!upload.ok || !upload.item) throw new Error(upload.error || 'Unable to upload attachment.')
-
-      const response = await callRpc(RPC_PEERCHAT_SEND, {
-        roomKey: activeRoom.roomKey,
-        message: upload.item.url,
-        fileName: asset.name,
-        fileSize: upload.item.byteLength ?? fileSize,
-        fileEnc: true
-      })
-      if (!response.ok) throw new Error(response.error || 'Unable to send attachment.')
       versionRef.current = -1
       await refreshRoom(true)
       if (soundsEnabled) playPeerChatSound('send', require('../../assets/sounds/peerchat/send.mp3'))
-      onStatus(`Sent ${asset.name}`)
+      onStatus(assets.length === 1 ? `Sent ${assets[0].name}` : `Sent ${assets.length} files`)
     })
   }
 
@@ -2482,6 +2517,26 @@ export function PeerChatScreen ({
                       ))}
                     </View>
                   )}
+                  <View style={[styles.preferenceRow, { backgroundColor: colors.input }]}>
+                    <View style={styles.preferenceCopy}>
+                      <Text style={[styles.memberName, { color: colors.text }]}>Picture screening</Text>
+                      <Text style={[styles.attachmentMeta, { color: colors.muted }]}>
+                        {scannerStatus === 'ready'
+                          ? 'Explicit pictures are refused before they are sent'
+                          : scannerStatus === 'starting'
+                            ? 'Starting up'
+                            : 'Unavailable on this device, so pictures are not checked'}
+                      </Text>
+                    </View>
+                    <Text style={[styles.preferenceState, {
+                      color: scannerStatus === 'ready'
+                        ? colors.accent
+                        : scannerStatus === 'starting' ? colors.muted : colors.danger
+                    }]}
+                    >
+                      {scannerStatus === 'ready' ? 'On' : scannerStatus === 'starting' ? '…' : 'Off'}
+                    </Text>
+                  </View>
                   <Pressable
                     accessibilityHint='Explains how PeerChat works'
                     accessibilityRole='button'
@@ -2976,6 +3031,24 @@ function PeerChatAttachment ({
     Number(item.fileSize) > 0 && Number(item.fileSize) <= AUTO_INLINE_MEDIA_MAX_BYTES
   const [mediaUrl, setMediaUrl] = useState<string | null>(null)
   const [isOpening, setIsOpening] = useState(false)
+  const [isExplicit, setIsExplicit] = useState(false)
+  const [isScreening, setIsScreening] = useState(false)
+
+  // Screening what arrived, not only what is sent. The sending side can be
+  // stripped out by anyone running a modified build, which is exactly why the
+  // text filters check inbound messages too.
+  useEffect(() => {
+    if (!mediaUrl || item.self) return
+    let cancelled = false
+    setIsScreening(true)
+    void scanMedia({ uri: mediaUrl, mimeType: getPeerChatAttachmentMimeType(item.fileName || ''), size: item.fileSize })
+      .then((verdict) => {
+        if (cancelled) return
+        setIsExplicit(verdict === MEDIA_BLOCKED)
+        setIsScreening(false)
+      })
+    return () => { cancelled = true }
+  }, [mediaUrl, item.self, item.fileName, item.fileSize])
 
   useEffect(() => {
     if (!canPreview || !mediaKind) return
@@ -3031,6 +3104,17 @@ function PeerChatAttachment ({
     } finally {
       setIsOpening(false)
     }
+  }
+
+  if (mediaUrl && mediaKind && (isScreening || isExplicit)) {
+    return (
+      <View style={[styles.inlineMediaCard, styles.mediaNotice, { backgroundColor: colors.input, borderColor: colors.muted }]}>
+        <Text style={[styles.mediaNoticeText, { color: isExplicit ? colors.danger : colors.muted }]}>
+          {isExplicit ? 'Hidden: this looks explicit' : 'Checking this picture'}
+        </Text>
+        <AttachmentCaption colors={colors} inline item={item} />
+      </View>
+    )
   }
 
   if (mediaUrl && mediaKind === 'image') {
@@ -3259,6 +3343,10 @@ const PEERCHAT_ABOUT = [
     a: 'Send them the invite link or the room key. Anyone who has it can join, so share it the way you would a house key.'
   },
   {
+    q: 'Can people send anything they like?',
+    a: 'Photos are checked before they are sent, and again when they arrive, so an explicit one is refused either way. That covers what you post, your profile picture and a room picture. Text goes through a filter for abuse, slurs and adult links.'
+  },
+  {
     q: 'Someone is bothering me',
     a: 'Open their profile and block them. Their direct messages stop right away, and you still share any rooms you are both in. Report sends a note to the people who build PeerChat.'
   },
@@ -3304,6 +3392,12 @@ function PeerChatMediaViewer ({
       statusBarTranslucent
       visible={target !== null}
     >
+      {/*
+        A Modal is its own root view on iOS, so a bare SafeAreaView inside it
+        reports zero top inset and the close button lands under the Dynamic
+        Island, leaving no way back. Its own provider gives it real insets.
+      */}
+      <SafeAreaProvider initialMetrics={initialWindowMetrics}>
       <SafeAreaView edges={['top', 'bottom', 'left', 'right']} style={styles.mediaViewer}>
         <View style={styles.mediaViewerHeader}>
           <Text numberOfLines={1} style={styles.mediaViewerTitle}>{target?.label}</Text>
@@ -3324,6 +3418,7 @@ function PeerChatMediaViewer ({
           {target?.kind === 'video' && <PeerChatVideo fullScreen mediaUrl={target.uri} />}
         </View>
       </SafeAreaView>
+      </SafeAreaProvider>
     </Modal>
   )
 }
@@ -3352,6 +3447,22 @@ function getPeerChatAttachmentMediaKind (fileName: string, url: string): 'image'
   if (/\.(?:avif|gif|jpe?g|png|webp)(?:\s|$)/.test(source)) return 'image'
   if (/\.(?:m4v|mov|mp4|webm)(?:\s|$)/.test(source)) return 'video'
   return null
+}
+
+// The classifier decides from the bytes, but it needs a type to build a data
+// url the page can decode. Only the still formats matter: video is not
+// screened yet.
+function getPeerChatAttachmentMimeType (fileName: string) {
+  const extension = fileName.toLocaleLowerCase().split('.').pop() || ''
+  const byExtension: Record<string, string> = {
+    avif: 'image/avif',
+    gif: 'image/gif',
+    jpeg: 'image/jpeg',
+    jpg: 'image/jpeg',
+    png: 'image/png',
+    webp: 'image/webp'
+  }
+  return byExtension[extension] || ''
 }
 
 function getRoomInitials (name: string) {
@@ -3649,6 +3760,8 @@ const styles = StyleSheet.create({
   messageText: { fontSize: 14, lineHeight: 19 },
   attachmentCard: { alignItems: 'center', borderRadius: 10, borderWidth: 1, flexDirection: 'row', gap: 9, minWidth: 190, padding: 9 },
   inlineMediaCard: { borderRadius: 10, borderWidth: 1, maxWidth: 260, overflow: 'hidden', width: 240 },
+  mediaNotice: { alignItems: 'center', gap: 4, justifyContent: 'center', minHeight: 110, padding: 12 },
+  mediaNoticeText: { fontSize: 13, fontWeight: '600' },
   inlineMediaImage: { height: 170, width: '100%' },
   inlineMediaVideo: { height: 180, width: '100%' },
   mediaViewer: { backgroundColor: '#090a0d', flex: 1 },

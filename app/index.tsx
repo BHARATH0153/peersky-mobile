@@ -134,6 +134,9 @@ import { HyperdriveScreen } from './hyperdrive/HyperdriveScreen'
 import { canUseNetworkForOfflineHyper } from './hyperdrive/offline-network.mjs'
 import { PeerChatScreen, type PeerChatResponse } from './peerchat/PeerChatScreen'
 import { parsePeerChatInvite } from './peerchat/peerchat-invite.mjs'
+import { screenUploadBytes } from './media/upload-gate'
+import { isUsableImageType, sniffBase64ImageType } from './media/media-moderation.mjs'
+import { NsfwScanner } from './media/NsfwScanner'
 import { usePeerChatNotifications } from './peerchat/usePeerChatNotifications'
 import { PeerTunesScreen } from './peertunes/PeerTunesScreen'
 import { peerSkyWebViewNativeConfig } from './downloads/PeerSkyWebView'
@@ -2269,7 +2272,7 @@ export default function App () {
       const response = action === 'preview'
         ? await callRpc(RPC_P2PMD_PREVIEW, payload)
         : action === 'hyper-image'
-          ? await callRpc(RPC_P2PMD_IMAGE_UPLOAD, payload)
+          ? await uploadP2pmdImage(payload as Record<string, unknown>)
           : action === 'peer-profile'
             ? saveP2pmdPeerDisplayName(peerProfileName)
           : { ok: false, error: `Unsupported P2PMD bridge action: ${action}` }
@@ -2280,6 +2283,24 @@ export default function App () {
         error: error instanceof Error ? error.message : String(error)
       })
     }
+  }
+
+  // P2PMD hands its images over as base64 from inside the WebView, so there is
+  // no file to point the picker at. It still goes through the same gate, or
+  // that becomes the way around it.
+  async function uploadP2pmdImage (payload: Record<string, unknown>) {
+    const base64 = typeof payload.contentBase64 === 'string' ? payload.contentBase64 : ''
+    // P2PMD sends bare base64 with no type. 'image/*' is not a type a decoder
+    // accepts, so the scan used to fail and wave the picture through; the
+    // magic bytes are what the backend reads too.
+    const declared = typeof payload.mimeType === 'string' ? payload.mimeType : ''
+    await screenUploadBytes({
+      base64,
+      name: typeof payload.name === 'string' ? payload.name : 'image',
+      size: base64.length,
+      mimeType: isUsableImageType(declared) ? declared : sniffBase64ImageType(base64)
+    })
+    return await callRpc(RPC_P2PMD_IMAGE_UPLOAD, payload)
   }
 
   function resolveP2pmdBridgeRequest (requestId: string, response: RpcResponse | { ok: boolean, error?: string }) {
@@ -3219,6 +3240,12 @@ export default function App () {
             />
           </View>
         )}
+
+        {/*
+          Registers itself as the upload gate's classifier, so PeerChat,
+          Hyperdrive and P2PMD all get screened without knowing it is here.
+        */}
+        <NsfwScanner />
 
         {browserTabsState.tabs.map((tab) => {
           if (!contentBlockingReady) return null
