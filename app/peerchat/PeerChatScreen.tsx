@@ -36,6 +36,7 @@ import {
   PEERCHAT_UI_STATE_MAX_BYTES,
   serializePeerChatUiState
 } from './ui-state.mjs'
+import { assessLink, describeLinkRisk, extractFirstLink, LINK_SUSPICIOUS } from './link-safety.mjs'
 import {
   filterPeerChatMembers,
   filterPeerChatMessages,
@@ -1982,24 +1983,12 @@ export function PeerChatScreen ({
                           colors.accent
                         )}
                       </Text>
-                      {item.preview && (
-                        <Pressable
-                          accessibilityHint='Opens the linked page'
-                          accessibilityRole='link'
-                          onPress={() => onOpenUrl(item.preview?.url || '')}
-                          style={[styles.linkPreview, { backgroundColor: colors.input, borderColor: colors.border }]}
-                        >
-                          <Text numberOfLines={1} style={[styles.linkPreviewHost, { color: colors.accent }]}>
-                            {item.preview.host || item.preview.url}
-                          </Text>
-                          {!!item.preview.title && (
-                            <Text numberOfLines={2} style={[styles.linkPreviewTitle, { color: colors.text }]}>{item.preview.title}</Text>
-                          )}
-                          {!!item.preview.description && (
-                            <Text numberOfLines={2} style={[styles.linkPreviewDescription, { color: colors.muted }]}>{item.preview.description}</Text>
-                          )}
-                        </Pressable>
-                      )}
+                      <PeerChatLinkCard
+                        colors={colors}
+                        message={item.message}
+                        onOpenUrl={onOpenUrl}
+                        preview={item.preview}
+                      />
                     </>
                     )}
               </Pressable>
@@ -2984,6 +2973,57 @@ export function PeerChatScreen ({
   )
 }
 
+// The preview, plus a plain warning when the link looks like a scam. Worked
+// out here at render time rather than trusted from the sender, and shown on
+// its own when there is no preview, since previews can be off or fail and
+// neither makes the link any safer.
+function PeerChatLinkCard ({
+  colors,
+  message,
+  onOpenUrl,
+  preview
+}: {
+  colors: typeof lightColors
+  message: string
+  onOpenUrl: (url: string) => void
+  preview?: PeerChatLinkPreview | null
+}) {
+  const url = preview?.url || extractFirstLink(message)
+  const assessment = assessLink(url)
+  const warning = describeLinkRisk(assessment)
+  const warningColor = assessment.level === LINK_SUSPICIOUS ? colors.danger : colors.muted
+
+  if (!preview) {
+    if (!warning) return null
+    return <Text style={[styles.linkWarning, { color: warningColor }]}>{warning}</Text>
+  }
+
+  return (
+    <Pressable
+      accessibilityHint='Opens the linked page'
+      accessibilityRole='link'
+      onPress={() => onOpenUrl(preview.url || '')}
+      style={[
+        styles.linkPreview,
+        { backgroundColor: colors.input, borderColor: assessment.level === LINK_SUSPICIOUS ? colors.danger : colors.border }
+      ]}
+    >
+      {!!warning && (
+        <Text style={[styles.linkPreviewWarning, { color: warningColor }]}>{warning}</Text>
+      )}
+      <Text numberOfLines={1} style={[styles.linkPreviewHost, { color: colors.accent }]}>
+        {preview.host || preview.url}
+      </Text>
+      {!!preview.title && (
+        <Text numberOfLines={2} style={[styles.linkPreviewTitle, { color: colors.text }]}>{preview.title}</Text>
+      )}
+      {!!preview.description && (
+        <Text numberOfLines={2} style={[styles.linkPreviewDescription, { color: colors.muted }]}>{preview.description}</Text>
+      )}
+    </Pressable>
+  )
+}
+
 function PeerChatAttachment ({
   colors,
   item,
@@ -3325,7 +3365,7 @@ const PEERCHAT_ABOUT = [
   },
   {
     q: 'Can people send anything they like?',
-    a: 'Some things are blocked for everyone, with nothing to switch on. Nudity in pictures is refused before it is sent and again when it arrives, covering what you post, your profile picture, a room picture and anything inside a folder you upload. Text is filtered for abuse, slurs and adult links. Violent or graphic pictures are not detected, so block and report are what to use for those.'
+    a: 'Some things are blocked for everyone, with nothing to switch on. Nudity in pictures is refused before it is sent and again when it arrives, covering what you post, your profile picture, a room picture and anything inside a folder you upload. Text is filtered for abuse, slurs and adult links. A link that looks like a scam gets a warning under it. Violent or graphic pictures are not detected, so block and report are what to use for those.'
   },
   {
     q: 'Someone is bothering me',
@@ -3764,6 +3804,8 @@ const styles = StyleSheet.create({
   linkPreviewHost: { fontSize: 10, fontWeight: '700' },
   linkPreviewTitle: { fontSize: 13, fontWeight: '800' },
   linkPreviewDescription: { fontSize: 11, lineHeight: 15 },
+  linkPreviewWarning: { fontSize: 11, fontWeight: '700' },
+  linkWarning: { fontSize: 11, fontWeight: '700', marginTop: 6 },
   preferenceRow: { alignItems: 'center', borderRadius: 12, flexDirection: 'row', gap: 10, padding: 11 },
   settingsSection: { gap: 8, marginTop: 6 },
   aboutCard: { borderRadius: 12, gap: 6, padding: 12 },
