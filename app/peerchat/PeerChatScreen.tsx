@@ -100,7 +100,7 @@ import SettingsIcon from '../../assets/icons/peerchat/settings.svg'
 import { CameraView, useCameraPermissions } from 'expo-camera'
 import { buildPeerChatInviteUrl, parsePeerChatInvite } from './peerchat-invite.mjs'
 import { pickUploads } from '../media/upload-gate'
-import { getMediaScannerStatus, onMediaScannerStatus, scanMedia } from '../media/NsfwScanner'
+import { scanMedia } from '../media/NsfwScanner'
 import { MEDIA_BLOCKED } from '../media/media-moderation.mjs'
 
 type PeerChatMessage = {
@@ -342,7 +342,6 @@ export function PeerChatScreen ({
   const [roomSpamRateLimit, setRoomSpamRateLimit] = useState(10)
   const [joinKey, setJoinKey] = useState('')
   const [isScanningInvite, setIsScanningInvite] = useState(false)
-  const [scannerStatus, setScannerStatus] = useState(getMediaScannerStatus())
   const [blockedPeers, setBlockedPeers] = useState<PeerChatBlockedPeer[]>([])
   const [cameraPermission, requestCameraPermission] = useCameraPermissions()
   const inviteScanHandledRef = useRef(false)
@@ -465,8 +464,6 @@ export function PeerChatScreen ({
       cancelled = true
     }
   }, [])
-
-  useEffect(() => onMediaScannerStatus(setScannerStatus), [])
 
   useEffect(() => {
     mountedRef.current = true
@@ -2517,26 +2514,6 @@ export function PeerChatScreen ({
                       ))}
                     </View>
                   )}
-                  <View style={[styles.preferenceRow, { backgroundColor: colors.input }]}>
-                    <View style={styles.preferenceCopy}>
-                      <Text style={[styles.memberName, { color: colors.text }]}>Picture screening</Text>
-                      <Text style={[styles.attachmentMeta, { color: colors.muted }]}>
-                        {scannerStatus === 'ready'
-                          ? 'Explicit pictures are refused before they are sent'
-                          : scannerStatus === 'starting'
-                            ? 'Starting up'
-                            : 'Unavailable on this device, so pictures are not checked'}
-                      </Text>
-                    </View>
-                    <Text style={[styles.preferenceState, {
-                      color: scannerStatus === 'ready'
-                        ? colors.accent
-                        : scannerStatus === 'starting' ? colors.muted : colors.danger
-                    }]}
-                    >
-                      {scannerStatus === 'ready' ? 'On' : scannerStatus === 'starting' ? '…' : 'Off'}
-                    </Text>
-                  </View>
                   <Pressable
                     accessibilityHint='Explains how PeerChat works'
                     accessibilityRole='button'
@@ -3344,7 +3321,7 @@ const PEERCHAT_ABOUT = [
   },
   {
     q: 'Can people send anything they like?',
-    a: 'Photos are checked before they are sent, and again when they arrive, so an explicit one is refused either way. That covers what you post, your profile picture, a room picture, and anything inside a folder you upload. Text goes through a filter for abuse, slurs and adult links.'
+    a: 'Some things are blocked for everyone, with nothing to switch on. Nudity in pictures is refused before it is sent and again when it arrives, covering what you post, your profile picture, a room picture and anything inside a folder you upload. Text is filtered for abuse, slurs and adult links. Violent or graphic pictures are not detected, so block and report are what to use for those.'
   },
   {
     q: 'Someone is bothering me',
