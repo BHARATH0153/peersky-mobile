@@ -129,7 +129,7 @@ test('a classifier that cannot answer never clears an upload', async () => {
   // every one of them is unscanned, never allowed.
   for (const guard of [
     /if \(declared\.startsWith\('video\/'\).*\) return MEDIA_UNSCANNED/,
-    /if \(!mimeType\) return MEDIA_UNSCANNED/,
+    /if \(!base64 \|\| !mimeType\) return MEDIA_UNSCANNED/,
     /if \(\(asset\.size \?\? 0\) > MAX_SCANNED_BYTES\) return MEDIA_UNSCANNED/,
     /if \(!liveWebView\) return MEDIA_UNSCANNED/,
     /resolve\(MEDIA_UNSCANNED\)\n {4}\}, SCAN_TIMEOUT_MS\)/,
@@ -138,8 +138,9 @@ test('a classifier that cannot answer never clears an upload', async () => {
     assert.match(host, guard)
   }
 
-  // Reading the bytes can fail on a file that has gone away.
-  assert.match(host, /catch \{\n {6}return MEDIA_UNSCANNED/)
+  // A file the decoder cannot open is a file it cannot judge.
+  assert.match(host, /catch \{[\s\S]{0,160}return MEDIA_UNSCANNED/)
+  assert.match(host, /if \(!base64 \|\| !mimeType\) return MEDIA_UNSCANNED/)
 
   // Off screen, not hidden: both platforms pause a hidden WebView and it would
   // never answer.
@@ -312,15 +313,18 @@ test('P2PMD images are screened with a type the decoder accepts', async () => {
   assert.ok(upload.indexOf('screenUploadBytes') < upload.indexOf('RPC_P2PMD_IMAGE_UPLOAD'))
 })
 
-test('the scan resolves the type only once it holds the bytes', async () => {
+test('bytes with no file behind them are still identified before screening', async () => {
   const host = await readFile(new URL('../../app/media/NsfwScanner.tsx', import.meta.url), 'utf8')
-  const fn = host.slice(host.indexOf('export async function scanMedia ('), host.indexOf('export function NsfwScanner'))
+  const fn = host.slice(host.indexOf('export async function scanMedia ('), host.indexOf('async function stageScannerFiles'))
 
-  // Sniffing before the file is read would bail on anything that declares no
-  // type, which is the whole case this exists for.
-  assert.ok(fn.indexOf('await new File(asset.uri).base64()') < fn.indexOf('sniffBase64ImageType(base64)'))
-  // Video is still rejected up front, so a large clip is never read into memory.
-  assert.ok(fn.indexOf("declared.startsWith('video/')") < fn.indexOf('await new File(asset.uri).base64()'))
+  // Anything with a file goes through the decoder, so its type is settled.
+  // P2PMD hands over bare base64 from a canvas instead, and that path still has
+  // to work out what it is holding rather than guessing.
+  assert.match(fn, /base64 = asset\.base64 \|\| ''/)
+  assert.match(fn, /isUsableImageType\(declared\) \? declared : sniffBase64ImageType\(base64\)/)
+
+  // Video is turned away up front, so a large clip is never decoded.
+  assert.ok(fn.indexOf("declared.startsWith('video/')") < fn.indexOf('ImageManipulator.manipulate'))
 })
 
 test('a folder upload screens every file in it before any of them go', async () => {

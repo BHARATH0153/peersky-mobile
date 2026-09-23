@@ -1,4 +1,5 @@
 import { Asset } from 'expo-asset'
+import { ImageManipulator, SaveFormat } from 'expo-image-manipulator'
 import { Directory, File, Paths } from 'expo-file-system'
 import { useEffect, useRef, useState } from 'react'
 import { StyleSheet, View } from 'react-native'
@@ -6,6 +7,7 @@ import WebView from 'react-native-webview'
 
 import {
   buildNsfwScannerPage,
+  NSFW_INPUT_SIZE,
   NSFW_LIBRARY_FILE,
   NSFW_MODEL_FILE,
   NSFW_PAGE_FILE
@@ -80,22 +82,32 @@ export async function scanMedia (asset: {
   if ((asset.size ?? 0) > MAX_SCANNED_BYTES) return MEDIA_UNSCANNED
   if (!liveWebView) return MEDIA_UNSCANNED
 
-  let base64 = asset.base64
-  if (!base64) {
-    if (!asset.uri) return MEDIA_UNSCANNED
+  let base64 = ''
+  let mimeType = ''
+  if (asset.uri) {
     try {
-      base64 = await new File(asset.uri).base64()
+      // Re-encoded rather than read raw. An iPhone photo is HEIC by default,
+      // which no sniffer here recognised and no data url could carry, so it
+      // used to come back unscanned and upload unchecked. Going through the
+      // decoder normalises whatever the platform can open into one JPEG, and
+      // shrinking to the size the model wants keeps the bridge payload small.
+      const rendered = await ImageManipulator.manipulate(asset.uri)
+        .resize({ width: NSFW_INPUT_SIZE })
+        .renderAsync()
+      const jpeg = await rendered.saveAsync({ base64: true, compress: 0.9, format: SaveFormat.JPEG })
+      base64 = jpeg.base64 || ''
+      mimeType = 'image/jpeg'
     } catch {
+      // Not something the platform can decode, so not something it can judge.
       return MEDIA_UNSCANNED
     }
+  } else {
+    // Bytes with no file behind them: P2PMD hands its editor images over this
+    // way, already PNG or JPEG from a canvas.
+    base64 = asset.base64 || ''
+    mimeType = isUsableImageType(declared) ? declared : sniffBase64ImageType(base64)
   }
-
-  // Resolved after the bytes are in hand, because a caller that declares no
-  // type at all still has to be screened. A wildcard or a missing type builds
-  // a data url nothing can decode, and an undecodable picture reads as a clean
-  // one, so the magic bytes decide.
-  const mimeType = isUsableImageType(declared) ? declared : sniffBase64ImageType(base64)
-  if (!mimeType) return MEDIA_UNSCANNED
+  if (!base64 || !mimeType) return MEDIA_UNSCANNED
 
   const id = String(++nextId)
   return await new Promise<string>((resolve) => {

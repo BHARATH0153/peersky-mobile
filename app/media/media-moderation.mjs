@@ -37,6 +37,10 @@ const BASE64_SIGNATURES = [
   ['image/gif', 'R0lGODdh'],
   ['image/gif', 'R0lGODlh'],
   ['image/webp', 'UklGR']
+  // No heic or avif here on purpose. Their magic sits after a length prefix
+  // that varies between files, so a base64 prefix match would only catch one
+  // size of header and quietly miss the rest. Anything with a file behind it
+  // goes through the decoder instead, which reads them properly.
 ]
 
 export function sniffBase64ImageType (base64) {

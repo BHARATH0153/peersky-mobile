@@ -3421,8 +3421,10 @@ function AttachmentCaption ({
 
 function getPeerChatAttachmentMediaKind (fileName: string, url: string): 'image' | 'video' | null {
   const source = `${fileName} ${url.split(/[?#]/, 1)[0]}`.toLocaleLowerCase()
-  if (/\.(?:avif|gif|jpe?g|png|webp)(?:\s|$)/.test(source)) return 'image'
-  if (/\.(?:m4v|mov|mp4|webm)(?:\s|$)/.test(source)) return 'video'
+  // heic and heif are what an iPhone camera writes by default, so leaving them
+  // out meant the commonest photo on the platform was not treated as one.
+  if (/\.(?:avif|gif|heic|heif|jpe?g|png|webp)(?:\s|$)/.test(source)) return 'image'
+  if (/\.(?:3gp|avi|m4v|mkv|mov|mp4|webm)(?:\s|$)/.test(source)) return 'video'
   return null
 }
 
@@ -3434,6 +3436,8 @@ function getPeerChatAttachmentMimeType (fileName: string) {
   const byExtension: Record<string, string> = {
     avif: 'image/avif',
     gif: 'image/gif',
+    heic: 'image/heic',
+    heif: 'image/heif',
     jpeg: 'image/jpeg',
     jpg: 'image/jpeg',
     png: 'image/png',
