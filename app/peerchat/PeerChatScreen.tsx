@@ -3015,7 +3015,11 @@ function PeerChatAttachment ({
   // stripped out by anyone running a modified build, which is exactly why the
   // text filters check inbound messages too.
   useEffect(() => {
-    if (!mediaUrl || item.self) return
+    // Images only. A video has no frame decoder here, so screening it always
+    // came back unscanned anyway, and flipping isScreening tore the video
+    // player down and rebuilt it mid-render: "Cannot use shared object that
+    // was already released".
+    if (!mediaUrl || item.self || mediaKind !== 'image') return
     let cancelled = false
     setIsScreening(true)
     void scanMedia({ uri: mediaUrl, mimeType: getPeerChatAttachmentMimeType(item.fileName || ''), size: item.fileSize })
@@ -3025,7 +3029,7 @@ function PeerChatAttachment ({
         setIsScreening(false)
       })
     return () => { cancelled = true }
-  }, [mediaUrl, item.self, item.fileName, item.fileSize])
+  }, [mediaUrl, item.self, item.fileName, item.fileSize, mediaKind])
 
   useEffect(() => {
     if (!canPreview || !mediaKind) return
@@ -3083,7 +3087,7 @@ function PeerChatAttachment ({
     }
   }
 
-  if (mediaUrl && mediaKind && (isScreening || isExplicit)) {
+  if (mediaUrl && mediaKind === 'image' && (isScreening || isExplicit)) {
     return (
       <View style={[styles.inlineMediaCard, styles.mediaNotice, { backgroundColor: colors.input, borderColor: colors.muted }]}>
         <Text style={[styles.mediaNoticeText, { color: isExplicit ? colors.danger : colors.muted }]}>

@@ -194,7 +194,7 @@ test('the classifier page is served from a file and says whether it started', as
   // A six megabyte page handed over as a prop is slow on iOS and silently
   // fails on Android, so the files are staged on disk and pulled in with
   // script tags. Nothing large may be built in JavaScript.
-  assert.match(host, /source=\{\{ uri: pageUri \}\}/)
+  assert.match(host, /source=\{source\}/)
   assert.doesNotMatch(host, /source=\{\{ html/)
   assert.match(host, /allowFileAccess/)
   assert.match(host, /allowingReadAccessToURL/)
@@ -242,10 +242,10 @@ test('what arrives is screened too, not only what is sent', async () => {
   const attachment = screen.slice(screen.indexOf('const [isExplicit'), screen.indexOf('if (mediaUrl && mediaKind === \'image\')'))
   assert.match(attachment, /void scanMedia\(\{ uri: mediaUrl/)
   // Your own upload was already screened on the way out.
-  assert.match(attachment, /if \(!mediaUrl \|\| item\.self\) return/)
+  assert.match(attachment, /if \(!mediaUrl \|\| item\.self \|\| mediaKind !== 'image'\) return/)
 
   // The picture must not render while the verdict is still outstanding.
-  assert.match(screen, /if \(mediaUrl && mediaKind && \(isScreening \|\| isExplicit\)\)/)
+  assert.match(screen, /if \(mediaUrl && mediaKind === 'image' && \(isScreening \|\| isExplicit\)\)/)
   assert.match(screen, /Hidden: this looks explicit/)
 })
 
@@ -416,4 +416,27 @@ test('every storage choice is reachable on Android', async () => {
   for (const option of ['private', 'device', 'public']) {
     assert.ok(fn.includes(`uploadFile('${option}'`), `${option} must be offered`)
   }
+})
+
+test('the classifier is not torn down by the parent re-rendering', async () => {
+  const host = await readFile(new URL('../../app/media/NsfwScanner.tsx', import.meta.url), 'utf8')
+
+  // App re-renders on every PeerChat change. A fresh {uri} object each time is
+  // a new source to the WebView, which reloads the page and orphans whatever
+  // scan is in flight until it times out as unscanned.
+  assert.match(host, /export const NsfwScanner = memo\(/)
+  assert.match(host, /const source = useMemo\(\(\) => \(\{ uri: pageUri \|\| '' \}\), \[pageUri\]\)/)
+  assert.match(host, /source=\{source\}/)
+  assert.doesNotMatch(host, /source=\{\{ uri: pageUri \}\}/)
+})
+
+test('video is never put through the image screen', async () => {
+  const screen = await readFile(new URL('../../app/peerchat/PeerChatScreen.tsx', import.meta.url), 'utf8')
+
+  // There is no frame decoder here, so a video always came back unscanned.
+  // Worse, flipping isScreening rebuilt the video player mid-render and the
+  // native object was already released.
+  assert.match(screen, /item\.self \|\| mediaKind !== 'image'\) return/)
+  assert.match(screen, /mediaKind === 'image' && \(isScreening \|\| isExplicit\)/)
+  assert.doesNotMatch(screen, /mediaKind && \(isScreening \|\| isExplicit\)/)
 })

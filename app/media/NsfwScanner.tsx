@@ -1,7 +1,7 @@
 import { Asset } from 'expo-asset'
 import { ImageManipulator, SaveFormat } from 'expo-image-manipulator'
 import { Directory, File, Paths } from 'expo-file-system'
-import { useEffect, useRef, useState } from 'react'
+import { memo, useEffect, useMemo, useState } from 'react'
 import { StyleSheet, View } from 'react-native'
 import WebView from 'react-native-webview'
 
@@ -164,7 +164,7 @@ async function stageScannerFiles () {
  * Mounted once by the app shell. It registers itself as the upload gate's
  * scanner, so nothing else has to know it exists.
  */
-export function NsfwScanner () {
+export const NsfwScanner = memo(function NsfwScanner () {
   const [pageUri, setPageUri] = useState<string | null>(null)
   const [folderUri, setFolderUri] = useState<string | null>(null)
 
@@ -194,6 +194,11 @@ export function NsfwScanner () {
       for (const id of [...pending.keys()]) settle(id, MEDIA_UNSCANNED)
     }
   }, [])
+
+  // A fresh object every render is a new source to the WebView, which reloads
+  // the page and orphans any scan already in flight until it times out as
+  // unscanned. The parent re-renders on every PeerChat change, so this matters.
+  const source = useMemo(() => ({ uri: pageUri || '' }), [pageUri])
 
   if (!pageUri) return null
 
@@ -235,11 +240,11 @@ export function NsfwScanner () {
           setStatus('unavailable')
         }}
         ref={(instance) => { liveWebView = instance }}
-        source={{ uri: pageUri }}
+        source={source}
       />
     </View>
   )
-}
+})
 
 const styles = StyleSheet.create({
   // Off screen rather than display:none, so the WebView still runs. A hidden
