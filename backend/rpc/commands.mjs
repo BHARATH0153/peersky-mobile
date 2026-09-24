@@ -54,5 +54,12 @@ export const RPC_PEERCHAT_DM_REJECT = 55
 export const RPC_PEERCHAT_ONBOARD = 56
 export const RPC_PEERCHAT_ATTACHMENT_UPLOAD = 57
 export const RPC_PEERCHAT_ATTACHMENT_OPEN = 58
+// 59-65 are the hyper offline range, so the PeerChat additions continue at 66.
+export const RPC_PEERCHAT_BLOCK = 66
+export const RPC_PEERCHAT_UNBLOCK = 67
 
 export const RPC_PEERTUNES_START = 70
+
+// Backend to app pushes. Separate range so they never collide with the
+// app-initiated commands above.
+export const RPC_APP_PEERCHAT_CHANGED = 100

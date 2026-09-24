@@ -8,10 +8,14 @@ const path = require('node:path')
 
 const ANDROID_PERMISSIONS = [
   'android.permission.FOREGROUND_SERVICE',
-  'android.permission.FOREGROUND_SERVICE_REMOTE_MESSAGING'
+  'android.permission.FOREGROUND_SERVICE_REMOTE_MESSAGING',
+  // So the service comes back after a reboot or an app update instead of
+  // leaving the peer offline until PeerSky is opened by hand.
+  'android.permission.RECEIVE_BOOT_COMPLETED'
 ]
 const PACKAGE_REGISTRATION = 'add(PeerChatBackgroundPackage())'
 const SERVICE_NAME = '.PeerChatBackgroundService'
+const BOOT_RECEIVER_NAME = '.PeerChatBootReceiver'
 const TEMPLATE_DIRECTORY = path.join(__dirname, 'templates')
 
 module.exports = function withPeerChatBackground (config) {
@@ -44,7 +48,8 @@ module.exports = function withPeerChatBackground (config) {
     for (const filename of [
       'PeerChatBackgroundModule.kt',
       'PeerChatBackgroundPackage.kt',
-      'PeerChatBackgroundService.kt'
+      'PeerChatBackgroundService.kt',
+      'PeerChatBootReceiver.kt'
     ]) {
       const source = fs.readFileSync(path.join(TEMPLATE_DIRECTORY, `${filename}.template`), 'utf8')
         .replaceAll('__PACKAGE_NAME__', packageName)
@@ -88,6 +93,30 @@ function addPeerChatBackgroundManifest (manifest) {
     })
   }
   application.service = services
+
+  // Rewritten rather than only added when missing: prebuild merges into an
+  // existing android/ directory, so an entry from an earlier run would keep its
+  // old attributes forever.
+  const bootReceiver = {
+    $: {
+      'android:name': BOOT_RECEIVER_NAME,
+      'android:enabled': 'true',
+      // Exported, because the system sends these from its own uid and a
+      // non-exported receiver is skipped. Both actions are protected
+      // broadcasts, so no other app can forge them.
+      'android:exported': 'true'
+    },
+    'intent-filter': [{
+      action: [
+        { $: { 'android:name': 'android.intent.action.BOOT_COMPLETED' } },
+        { $: { 'android:name': 'android.intent.action.MY_PACKAGE_REPLACED' } }
+      ]
+    }]
+  }
+  const receivers = (application.receiver || [])
+    .filter((entry) => entry.$?.['android:name'] !== BOOT_RECEIVER_NAME)
+  receivers.push(bootReceiver)
+  application.receiver = receivers
   return manifest
 }
 

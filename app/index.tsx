@@ -133,6 +133,10 @@ import {
 import { HyperdriveScreen } from './hyperdrive/HyperdriveScreen'
 import { canUseNetworkForOfflineHyper } from './hyperdrive/offline-network.mjs'
 import { PeerChatScreen, type PeerChatResponse } from './peerchat/PeerChatScreen'
+import { parsePeerChatInvite } from './peerchat/peerchat-invite.mjs'
+import { screenUploadBytes } from './media/upload-gate'
+import { isUsableImageType, sniffBase64ImageType } from './media/media-moderation.mjs'
+import { NsfwScanner } from './media/NsfwScanner'
 import { usePeerChatNotifications } from './peerchat/usePeerChatNotifications'
 import { PeerTunesScreen } from './peertunes/PeerTunesScreen'
 import { peerSkyWebViewNativeConfig } from './downloads/PeerSkyWebView'
@@ -177,6 +181,7 @@ import {
   RPC_P2PMD_ROOM_JOIN,
   RPC_P2PMD_ROOM_PUBLISH,
   RPC_P2PMD_ROOM_STATUS,
+  RPC_APP_PEERCHAT_CHANGED,
   RPC_PEERTUNES_START
 } from '../backend/rpc/commands.mjs'
 
@@ -400,6 +405,7 @@ export default function App () {
   const [peertunesLaunchSuffix, setPeertunesLaunchSuffix] = useState('')
   const [peertunesError, setPeertunesError] = useState<string | null>(null)
   const [peertunesMounted, setPeertunesMounted] = useState(false)
+  const [peerChatRevision, setPeerChatRevision] = useState(0)
   const [p2pmdRoom, setP2pmdRoom] = useState<P2pmdRoom | null>(null)
   const [p2pmdEditorHtml, setP2pmdEditorHtml] = useState<string | null>(null)
   const [p2pmdJoinKey, setP2pmdJoinKey] = useState('')
@@ -680,7 +686,16 @@ export default function App () {
       const worklet = new Worklet()
       worklet.start('/app.bundle', bundle, [storageDir])
 
-      const rpc = new RPC(worklet.IPC, () => {})
+      // The backend pushes here when PeerChat changes, so a new message shows
+      // the moment it lands instead of waiting for the next poll.
+      const rpc = new RPC(worklet.IPC, (request) => {
+        if (request.command === RPC_APP_PEERCHAT_CHANGED) {
+          setPeerChatRevision((value) => value + 1)
+        }
+        try {
+          request.reply()
+        } catch {}
+      })
 
       workletRef.current = worklet
       rpcRef.current = rpc
@@ -1093,6 +1108,11 @@ export default function App () {
       replaceBrowserEntry(appUrl, { kind: 'app', app })
     }
 
+    if (app === 'peerchat') {
+      const invited = parsePeerChatInvite(launchSuffix)
+      if (invited) setRequestedPeerChatRoomKey(invited)
+    }
+
     if (app === 'peertunes') {
       setPeertunesMounted(true)
       setPeertunesLaunchSuffix(launchSuffix)
@@ -1325,6 +1345,14 @@ export default function App () {
     setBrowserMediaTarget(null)
     setBrowserTitle('New tab')
     return true
+  }
+
+  // A link tapped inside one of the built-in apps is leaving that app. Opening
+  // it over the top loses the chat you were reading or stops the music, so it
+  // gets its own tab and the app stays where it was.
+  function openBrowserUrlInNewTab (targetUrl: string) {
+    if (createBrowserTab(targetUrl)) return
+    void loadBrowserUrl(targetUrl)
   }
 
   function onBrowserNewTab () {
@@ -2244,7 +2272,7 @@ export default function App () {
       const response = action === 'preview'
         ? await callRpc(RPC_P2PMD_PREVIEW, payload)
         : action === 'hyper-image'
-          ? await callRpc(RPC_P2PMD_IMAGE_UPLOAD, payload)
+          ? await uploadP2pmdImage(payload as Record<string, unknown>)
           : action === 'peer-profile'
             ? saveP2pmdPeerDisplayName(peerProfileName)
           : { ok: false, error: `Unsupported P2PMD bridge action: ${action}` }
@@ -2255,6 +2283,24 @@ export default function App () {
         error: error instanceof Error ? error.message : String(error)
       })
     }
+  }
+
+  // P2PMD hands its images over as base64 from inside the WebView, so there is
+  // no file to point the picker at. It still goes through the same gate, or
+  // that becomes the way around it.
+  async function uploadP2pmdImage (payload: Record<string, unknown>) {
+    const base64 = typeof payload.contentBase64 === 'string' ? payload.contentBase64 : ''
+    // P2PMD sends bare base64 with no type. 'image/*' is not a type a decoder
+    // accepts, so the scan used to fail and wave the picture through; the
+    // magic bytes are what the backend reads too.
+    const declared = typeof payload.mimeType === 'string' ? payload.mimeType : ''
+    await screenUploadBytes({
+      base64,
+      name: typeof payload.name === 'string' ? payload.name : 'image',
+      size: base64.length,
+      mimeType: isUsableImageType(declared) ? declared : sniffBase64ImageType(base64)
+    })
+    return await callRpc(RPC_P2PMD_IMAGE_UPLOAD, payload)
   }
 
   function resolveP2pmdBridgeRequest (requestId: string, response: RpcResponse | { ok: boolean, error?: string }) {
@@ -2872,13 +2918,14 @@ export default function App () {
               ? (
                 <PeerChatScreen
                   isDark={browserIsDark}
+                  revision={peerChatRevision}
                   notificationPreferencesReady={peerChatNotifications.isReady}
                   notificationsEnabled={peerChatNotifications.notificationsEnabled}
                   onCallRpc={(command, data = {}) => callRpc(command, data) as Promise<PeerChatResponse>}
                   onNotificationsEnabledChange={peerChatNotifications.setNotificationsEnabled}
                   onOpenLocalFile={openBrowserLocalFile}
                   onRequestedRoomHandled={() => setRequestedPeerChatRoomKey(null)}
-                  onOpenUrl={(targetUrl) => void loadBrowserUrl(targetUrl)}
+                  onOpenUrl={(targetUrl) => openBrowserUrlInNewTab(targetUrl)}
                   onSoundsEnabledChange={peerChatNotifications.setSoundsEnabled}
                   onStatus={setStatus}
                   requestedRoomKey={requestedPeerChatRoomKey}
@@ -3188,11 +3235,17 @@ export default function App () {
               launchSuffix={peertunesLaunchSuffix}
               localUrl={peertunesUrl}
               onEnsureServer={() => void ensurePeerTunesServer()}
-              onOpenUrl={(targetUrl) => void loadBrowserUrl(targetUrl)}
+              onOpenUrl={(targetUrl) => openBrowserUrlInNewTab(targetUrl)}
               onStatus={setStatus}
             />
           </View>
         )}
+
+        {/*
+          Registers itself as the upload gate's classifier, so PeerChat,
+          Hyperdrive and P2PMD all get screened without knowing it is here.
+        */}
+        <NsfwScanner />
 
         {browserTabsState.tabs.map((tab) => {
           if (!contentBlockingReady) return null

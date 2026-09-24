@@ -31,12 +31,14 @@ import {
   RPC_P2PMD_ROOM_JOIN,
   RPC_P2PMD_ROOM_PUBLISH,
   RPC_P2PMD_ROOM_STATUS,
+  RPC_PEERCHAT_BLOCK,
   RPC_PEERCHAT_INIT,
   RPC_PEERCHAT_PROFILE_SET,
   RPC_PEERCHAT_ROOM_CREATE,
   RPC_PEERCHAT_ROOM_JOIN,
   RPC_PEERCHAT_ROOMS,
   RPC_PEERCHAT_SNAPSHOT,
+  RPC_PEERCHAT_UNBLOCK,
   RPC_PEERCHAT_SEND,
   RPC_PEERCHAT_ROOM_LEAVE,
   RPC_PEERCHAT_REACT,
@@ -437,6 +439,7 @@ export async function routeRpcRequest (req) {
         rooms: peerChat.listRooms(),
         unreadTotal: peerChat.getUnreadTotal(),
         pendingDirectMessages: peerChat.listPendingDirectMessages(),
+        blockedPeers: peerChat.listBlockedPeers(),
         version: peerChat.version
       })
       return
@@ -486,7 +489,26 @@ export async function routeRpcRequest (req) {
         rooms: peerChat.listRooms(),
         unreadTotal: peerChat.getUnreadTotal(),
         pendingDirectMessages: peerChat.listPendingDirectMessages(),
+        blockedPeers: peerChat.listBlockedPeers(),
         version: peerChat.version
+      })
+      return
+    }
+
+    if (req.command === RPC_PEERCHAT_BLOCK) {
+      const peerChat = await getPeerChatService()
+      replyJson(req, {
+        ok: true,
+        ...peerChat.blockPeer(parseJsonMessage(req.data))
+      })
+      return
+    }
+
+    if (req.command === RPC_PEERCHAT_UNBLOCK) {
+      const peerChat = await getPeerChatService()
+      replyJson(req, {
+        ok: true,
+        ...peerChat.unblockPeer(parseJsonMessage(req.data))
       })
       return
     }

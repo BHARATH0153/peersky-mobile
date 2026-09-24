@@ -2,6 +2,8 @@ import { NativeEventEmitter, NativeModules, Platform } from 'react-native'
 
 type PeerChatBackgroundModule = {
   setEnabled: (enabled: boolean) => Promise<void>
+  isIgnoringBatteryOptimizations: () => Promise<boolean>
+  openBatteryOptimizationSettings: () => Promise<void>
   playSound: (kind: 'send' | 'receive') => void
   addListener: (eventName: string) => void
   removeListeners: (count: number) => void
@@ -18,6 +20,27 @@ export async function setPeerChatBackgroundEnabled (enabled: boolean) {
   const module = getPeerChatBackgroundModule()
   if (!module?.setEnabled) throw new Error('PeerChat background service is unavailable in this build.')
   await module.setEnabled(enabled)
+}
+
+// A foreground service survives Doze. It does not survive Samsung's own
+// sleeping-apps layer, which is what actually takes the peer offline after a
+// day or two idle, so the exemption is worth asking for.
+export async function isPeerChatBatteryUnrestricted () {
+  if (Platform.OS !== 'android') return true
+  const module = getPeerChatBackgroundModule()
+  if (!module?.isIgnoringBatteryOptimizations) return true
+  try {
+    return await module.isIgnoringBatteryOptimizations()
+  } catch {
+    return true
+  }
+}
+
+export async function openPeerChatBatterySettings () {
+  if (Platform.OS !== 'android') return
+  const module = getPeerChatBackgroundModule()
+  if (!module?.openBatteryOptimizationSettings) return
+  await module.openBatteryOptimizationSettings()
 }
 
 export function addPeerChatBackgroundTickListener (listener: () => void) {

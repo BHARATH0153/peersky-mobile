@@ -69,7 +69,10 @@ export async function requestPeerChatNotificationPermission () {
       allowSound: true
     }
   })
-  const granted = permission.granted || (
+  // Declining is an answer, not a problem to solve. Nothing is opened here; the
+  // screen offers Settings only if the user asks for notifications again and
+  // the system has stopped showing its own prompt.
+  return permission.granted || (
     Platform.OS === 'ios' &&
     permission.ios != null &&
     [
@@ -78,8 +81,25 @@ export async function requestPeerChatNotificationPermission () {
       Notifications.IosAuthorizationStatus.EPHEMERAL
     ].includes(permission.ios.status)
   )
-  if (!granted && permission.canAskAgain === false) await Linking.openSettings()
-  return granted
+}
+
+// True once the system will no longer ask, so the only way back is Settings.
+export async function isPeerChatNotificationBlocked () {
+  if (await hasPeerChatNotificationPermission()) return false
+  const permission = await Notifications.getPermissionsAsync()
+  return permission.canAskAgain === false
+}
+
+// iOS 15.4 and newer open the app's own notification page. Everything else
+// lands on the app's settings page, which is as close as the platform gets.
+export async function openPeerChatNotificationSettings () {
+  if (Platform.OS === 'ios') {
+    try {
+      await Linking.openURL('app-settings:notifications')
+      return
+    } catch {}
+  }
+  await Linking.openSettings()
 }
 
 export async function presentPeerChatNotification ({

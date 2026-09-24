@@ -2,6 +2,7 @@ import { useEffect, useState, useRef } from 'react'
 import {
   ActivityIndicator,
   Alert,
+  Platform,
   Animated,
   Clipboard,
   Easing,
@@ -16,8 +17,8 @@ import {
 } from 'react-native'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { CameraView, useCameraPermissions } from 'expo-camera'
-import * as DocumentPicker from 'expo-document-picker'
 import { File } from 'expo-file-system'
+import { pickUploadFolder, pickUploads, type UploadAsset } from '../media/upload-gate'
 import ArrowLeftIcon from '../../assets/icons/bootstrap/arrow-left.svg'
 import ChevronRightIcon from '../../assets/icons/bootstrap/chevron-right.svg'
 import CopyIcon from '../../assets/icons/bootstrap/copy.svg'
@@ -49,6 +50,7 @@ const hyperdriveIcon = require('../../assets/images/hyperdrive.png')
 type RecentSource = 'fetched' | 'uploaded'
 type RecentFilter = 'all' | RecentSource
 type UploadVisibility = 'public' | 'private' | 'device'
+type UploadSource = 'files' | 'folder'
 
 type HyperdriveItem = {
   type: 'directory' | 'file'
@@ -223,51 +225,75 @@ export function HyperdriveScreen ({ offlineNetworkAllowed, isDark, isLandscape, 
     }
   }
 
-  function chooseUploadVisibility () {
+  function chooseUploadSource () {
     if (busyAction) return
     Alert.alert(
-      'Choose where to store the file',
-      'Public files can be shared, and anyone with one public link may browse other files in your public drive. Private files are encrypted and locked with a key that lives on this phone: sharing a link is safe, but only a device holding the key can open the drive. Paste an identity-transfer URL in Settings to adopt a drive published on the desktop browser; a phone-created keyed drive has no export path yet, so it stays on this phone. This device only keeps files on this phone and never syncs.',
+      'Upload to Hyperdrive',
+      'A folder keeps its files together. Everything in it is screened the same way single files are.',
       [
         { text: 'Cancel', style: 'cancel' },
-        { text: 'Private', onPress: () => void uploadFile('private') },
-        { text: 'This device only', onPress: () => void uploadFile('device') },
-        { text: 'Public', onPress: () => void uploadFile('public') }
+        { text: 'Files', onPress: () => chooseUploadVisibility('files') },
+        { text: 'Folder', onPress: () => chooseUploadVisibility('folder') }
       ]
     )
   }
 
-  async function uploadFile (visibility: UploadVisibility) {
+  function chooseUploadVisibility (source: UploadSource) {
+    Alert.alert(
+      'Choose where to store the file',
+      'Public files can be shared, and anyone with one public link may browse other files in your public drive. Private files are encrypted and locked with a key that lives on this phone: sharing a link is safe, but only a device holding the key can open the drive. Paste an identity-transfer URL in Settings to adopt a drive published on the desktop browser; a phone-created keyed drive has no export path yet, so it stays on this phone. This device only keeps files on this phone and never syncs.',
+      [
+        // Android renders at most three buttons and silently drops the rest,
+        // which is why Public was missing there. Back dismisses instead.
+        ...(Platform.OS === 'android' ? [] : [{ text: 'Cancel', style: 'cancel' as const }]),
+        { text: 'Private', onPress: () => void uploadFile('private', source) },
+        { text: 'This device only', onPress: () => void uploadFile('device', source) },
+        { text: 'Public', onPress: () => void uploadFile('public', source) }
+      ],
+      { cancelable: true }
+    )
+  }
+
+  async function uploadFile (visibility: UploadVisibility, source: UploadSource = 'files') {
     if (busyAction) return
-    const selection = await DocumentPicker.getDocumentAsync({ copyToCacheDirectory: true, multiple: false })
-    if (selection.canceled || !selection.assets[0]) return
 
-    const asset = selection.assets[0]
-    const file = new File(asset.uri)
-    const fileSize = asset.size ?? file.size
-    if (!Number.isSafeInteger(fileSize) || !fileSize) {
-      setError('Choose a non-empty file.')
-      return
-    }
-
-    setBusyAction('upload')
     setError(null)
     setNotice(null)
+    let assets: UploadAsset[] = []
     try {
-      const response = await onCallRpc(RPC_HYPER_LIBRARY_UPLOAD, {
-        name: asset.name,
-        fileUri: file.uri,
-        byteLength: fileSize,
-        visibility
-      })
-      if (!response.ok || !response.item) throw new Error(response.error || 'Upload failed.')
-      const uploadedItem = { ...response.item, localUri: file.uri }
-      remember(uploadedItem, 'uploaded')
-      onStatus(`Uploaded ${response.item.name}`)
-      const uploadMessage = getUploadSuccessMessage(visibility, response.item)
+      // Same gate as PeerChat and P2PMD either way: bounded batch, every file
+      // screened before any of it is uploaded.
+      assets = source === 'folder' ? await pickUploadFolder() : await pickUploads({ multiple: true })
+    } catch (pickError) {
+      setError(pickError instanceof Error ? pickError.message : String(pickError))
+      return
+    }
+    if (assets.length === 0) return
+
+    setBusyAction('upload')
+    try {
+      let lastItem = null
+      for (const [index, asset] of assets.entries()) {
+        // A folder can carry fifty files. Without this the spinner is
+        // indistinguishable from the app having hung.
+        if (assets.length > 1) setNotice(`Uploading ${index + 1} of ${assets.length}: ${asset.name}`)
+        const response = await onCallRpc(RPC_HYPER_LIBRARY_UPLOAD, {
+          name: asset.name,
+          fileUri: asset.uri,
+          byteLength: asset.size,
+          visibility
+        })
+        if (!response.ok || !response.item) throw new Error(response.error || 'Upload failed.')
+        lastItem = { ...response.item, localUri: asset.uri }
+        remember(lastItem, 'uploaded')
+      }
+      if (!lastItem) return
+
+      onStatus(assets.length === 1 ? `Uploaded ${lastItem.name}` : `Uploaded ${assets.length} files`)
+      const uploadMessage = getUploadSuccessMessage(visibility, lastItem)
       Alert.alert('Uploaded to Hyperdrive', uploadMessage, [
         { text: 'Done' },
-        { text: 'Open', onPress: () => onOpenItem(uploadedItem) }
+        { text: 'Open', onPress: () => onOpenItem(lastItem) }
       ])
     } catch (uploadError) {
       setError(uploadError instanceof Error ? uploadError.message : String(uploadError))
@@ -449,7 +475,7 @@ export function HyperdriveScreen ({ offlineNetworkAllowed, isDark, isLandscape, 
         <Pressable
           accessibilityRole='button'
           disabled={Boolean(busyAction)}
-          onPress={chooseUploadVisibility}
+          onPress={chooseUploadSource}
           style={({ pressed }) => [styles.primaryAction, { backgroundColor: palette.accent }, pressed ? styles.pressed : null, busyAction ? styles.disabled : null]}
         >
           {busyAction === 'upload' ? <ActivityIndicator color='#ffffff' /> : <UploadIcon width={20} height={20} color='#ffffff' />}

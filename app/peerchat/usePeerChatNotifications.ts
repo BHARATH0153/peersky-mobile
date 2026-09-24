@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { File, Paths } from 'expo-file-system'
 import { AppState } from 'react-native'
 
-import { RPC_PEERCHAT_ROOMS } from '../../backend/rpc/commands.mjs'
+import { RPC_HYPER_REFRESH, RPC_PEERCHAT_ROOMS } from '../../backend/rpc/commands.mjs'
 import {
   collectPeerChatNotificationCandidates,
   DEFAULT_PEERCHAT_NOTIFICATION_PREFERENCES,
@@ -49,6 +49,10 @@ type NotificationPreferences = {
 }
 
 const POLL_INTERVAL_MS = 5000
+// A network change in the background leaves a stale swarm announce behind, and
+// until this the only refresh was on the app coming back to the foreground. On
+// a phone left alone overnight that is the difference between reachable and not.
+const BACKGROUND_REFRESH_INTERVAL_MS = 15 * 60 * 1000
 const PREFERENCES_FILE = new File(Paths.document, 'peerchat-notifications.json')
 const RECEIVE_SOUND = require('../../assets/sounds/peerchat/receive.mp3')
 
@@ -238,8 +242,18 @@ export function usePeerChatNotifications ({
     const subscription = AppState.addEventListener('change', (state) => {
       if (state === 'active') void poll()
     })
+    let lastBackgroundRefresh = Date.now()
     const backgroundTickSubscription = addPeerChatBackgroundTickListener(() => {
-      if (preferencesRef.current.notifications) void poll()
+      if (!preferencesRef.current.notifications) return
+      void poll()
+
+      if (AppState.currentState === 'active') return
+      const now = Date.now()
+      if (now - lastBackgroundRefresh < BACKGROUND_REFRESH_INTERVAL_MS) return
+      lastBackgroundRefresh = now
+      void callRpcRef.current(RPC_HYPER_REFRESH, {}).catch((error) => {
+        console.warn('Unable to refresh Hyper networking in the background:', error)
+      })
     })
 
     void preparePeerChatNotifications().catch((error) => {

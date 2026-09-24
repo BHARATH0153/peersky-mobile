@@ -1,0 +1,31 @@
+package __PACKAGE_NAME__
+
+import android.content.BroadcastReceiver
+import android.content.Context
+import android.content.Intent
+import android.util.Log
+import androidx.core.content.ContextCompat
+
+// Without this a reboot ends the background connection for good, because
+// nothing starts the service again until the user opens PeerSky.
+class PeerChatBootReceiver : BroadcastReceiver() {
+  override fun onReceive(context: Context?, intent: Intent?) {
+    if (context == null) return
+    if (intent?.action != Intent.ACTION_BOOT_COMPLETED &&
+      intent?.action != Intent.ACTION_MY_PACKAGE_REPLACED
+    ) return
+    if (!PeerChatBackgroundService.isWanted(context)) return
+    // Android restricts which foreground service types may be started from a
+    // boot broadcast, and OEMs vary on top of that. A refusal throws, and an
+    // uncaught throw inside a receiver takes the whole app down at boot, so
+    // losing the background connection is the failure we want here.
+    try {
+      ContextCompat.startForegroundService(
+        context,
+        Intent(context, PeerChatBackgroundService::class.java)
+      )
+    } catch (error: Exception) {
+      Log.w("PeerChatBoot", "Unable to start the background service at boot: " + error.message)
+    }
+  }
+}
